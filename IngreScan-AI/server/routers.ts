@@ -4,6 +4,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { insightsRouter, rescueRouter, whatsappRouter } from "./featureRouters";
 import { qcRouter, receiptRouter } from "./opsRouters";
+import { householdRouter } from "./householdRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
@@ -895,6 +896,7 @@ Be helpful, accurate, educational, and personalized to the user's health profile
   whatsapp: whatsappRouter,
   qc: qcRouter,
   receipt: receiptRouter,
+  household: householdRouter,
 
   openFoodFacts: router({
     getByBarcode: publicProcedure

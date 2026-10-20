@@ -2,7 +2,8 @@
  * Database access for the WhatsApp bot, the unified pantry view and B2B quality-control batches.
  * Works on both dialects (MySQL / embedded SQLite) through the helpers in ./_core/database.
  */
-import { and, desc, eq, gt, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, ne, sql, inArray } from "drizzle-orm";
+import { getHouseholdMemberUserIds } from "./dbHousehold";
 import type { InsertQcBatch, InsertQcItem } from "../drizzle/schema";
 import { affectedRows, getDbContext, insertedId, upsertRow, type DbContext } from "./_core/database";
 
@@ -194,12 +195,20 @@ function dateOnly(value: Date | string): string {
 /** Active (not consumed) items from both pantries (packaged fridge tracker + FreshGuard produce). */
 export async function listActivePantry(userId: number): Promise<PantryEntry[]> {
   const { db, s } = await ctxOrThrow();
+  const memberIds = await getHouseholdMemberUserIds(userId);
+  const foodUserCondition = memberIds.length > 1
+    ? inArray(s.foodInventory.userId, memberIds)
+    : eq(s.foodInventory.userId, userId);
+  const produceUserCondition = memberIds.length > 1
+    ? inArray(s.produceInventory.userId, memberIds)
+    : eq(s.produceInventory.userId, userId);
+
   const [packaged, produce] = await Promise.all([
     db
       .select()
       .from(s.foodInventory)
-      .where(and(eq(s.foodInventory.userId, userId), ne(s.foodInventory.status, "consumed"))),
-    db.select().from(s.produceInventory).where(eq(s.produceInventory.userId, userId)),
+      .where(and(foodUserCondition, ne(s.foodInventory.status, "consumed"))),
+    db.select().from(s.produceInventory).where(produceUserCondition),
   ]);
   const rows: PantryEntry[] = [
     ...packaged.map((r) => ({
@@ -227,14 +236,22 @@ export async function clearPantryEntry(userId: number, compositeId: string): Pro
   const match = /^(produce|packaged):(\d+)$/.exec(compositeId);
   if (!match) return false;
   const id = Number(match[2]);
+  const memberIds = await getHouseholdMemberUserIds(userId);
+  const foodUserCondition = memberIds.length > 1
+    ? inArray(s.foodInventory.userId, memberIds)
+    : eq(s.foodInventory.userId, userId);
+  const produceUserCondition = memberIds.length > 1
+    ? inArray(s.produceInventory.userId, memberIds)
+    : eq(s.produceInventory.userId, userId);
+
   if (match[1] === "produce") {
-    const result = await db.delete(s.produceInventory).where(and(eq(s.produceInventory.id, id), eq(s.produceInventory.userId, userId)));
+    const result = await db.delete(s.produceInventory).where(and(eq(s.produceInventory.id, id), produceUserCondition));
     return affectedRows(ctx, result) > 0;
   }
   const result = await db
     .update(s.foodInventory)
     .set({ status: "consumed" })
-    .where(and(eq(s.foodInventory.id, id), eq(s.foodInventory.userId, userId)));
+    .where(and(eq(s.foodInventory.id, id), foodUserCondition));
   return affectedRows(ctx, result) > 0;
 }
 

@@ -1,4 +1,5 @@
-import { eq, desc, and, isNull } from "drizzle-orm";
+import { eq, desc, and, isNull, inArray } from "drizzle-orm";
+import { getHouseholdMemberUserIds } from "./dbHousehold";
 import type {
   InsertUser,
   InsertUserProfile,
@@ -367,8 +368,12 @@ export async function getUserInventory(userId: number) {
   const ctx = await getCtx();
   if (!ctx) return [];
   const { db, s } = ctx;
+  const memberIds = await getHouseholdMemberUserIds(userId);
+  const whereCondition = memberIds.length > 1
+    ? inArray(s.foodInventory.userId, memberIds)
+    : eq(s.foodInventory.userId, userId);
   return db.select().from(s.foodInventory)
-    .where(eq(s.foodInventory.userId, userId))
+    .where(whereCondition)
     .orderBy(s.foodInventory.expiryDate, s.foodInventory.id);
 }
 
@@ -388,9 +393,13 @@ export async function updateInventoryItem(
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
+  const memberIds = await getHouseholdMemberUserIds(userId);
+  const userCondition = memberIds.length > 1
+    ? inArray(s.foodInventory.userId, memberIds)
+    : eq(s.foodInventory.userId, userId);
   const result = await db.update(s.foodInventory)
     .set({ ...updates, updatedAt: new Date() })
-    .where(and(eq(s.foodInventory.id, id), eq(s.foodInventory.userId, userId)));
+    .where(and(eq(s.foodInventory.id, id), userCondition));
   return affectedRows(ctx, result);
 }
 
@@ -398,8 +407,12 @@ export async function deleteInventoryItem(id: number, userId: number): Promise<n
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
+  const memberIds = await getHouseholdMemberUserIds(userId);
+  const userCondition = memberIds.length > 1
+    ? inArray(s.foodInventory.userId, memberIds)
+    : eq(s.foodInventory.userId, userId);
   const result = await db.delete(s.foodInventory)
-    .where(and(eq(s.foodInventory.id, id), eq(s.foodInventory.userId, userId)));
+    .where(and(eq(s.foodInventory.id, id), userCondition));
   return affectedRows(ctx, result);
 }
 
@@ -434,8 +447,12 @@ export async function listProduceInventory(userId: number) {
   const ctx = await getCtx();
   if (!ctx) return [];
   const { db, s } = ctx;
+  const memberIds = await getHouseholdMemberUserIds(userId);
+  const userCondition = memberIds.length > 1
+    ? inArray(s.produceInventory.userId, memberIds)
+    : eq(s.produceInventory.userId, userId);
   return db.select().from(s.produceInventory)
-    .where(eq(s.produceInventory.userId, userId))
+    .where(userCondition)
     .orderBy(desc(s.produceInventory.id));
 }
 
@@ -452,7 +469,13 @@ export async function deleteProduceInventoryItem(id: number, userId: number) {
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
+  const memberIds = await getHouseholdMemberUserIds(userId);
+  const userCondition = memberIds.length > 1
+    ? inArray(s.produceInventory.userId, memberIds)
+    : eq(s.produceInventory.userId, userId);
   const result = await db.delete(s.produceInventory)
-    .where(and(eq(s.produceInventory.id, id), eq(s.produceInventory.userId, userId)));
+    .where(and(eq(s.produceInventory.id, id), userCondition));
   return affectedRows(ctx, result) > 0;
 }
+
+export * from "./dbHousehold";

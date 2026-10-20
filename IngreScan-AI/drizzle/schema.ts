@@ -346,3 +346,34 @@ export const qcItems = mysqlTable("qc_items", {
 
 export type QcItem = typeof qcItems.$inferSelect;
 export type InsertQcItem = typeof qcItems.$inferInsert;
+
+/**
+ * Multi-member household fridge sharing.
+ */
+export const households = mysqlTable("households", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  inviteCode: varchar("invite_code", { length: 16 }).notNull(),
+  ownerId: int("owner_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, t => ({
+  inviteCodeUnique: uniqueIndex("households_invite_code_unique").on(t.inviteCode),
+  ownerIdx: index("households_owner_id_idx").on(t.ownerId),
+}));
+
+export type Household = typeof households.$inferSelect;
+export type InsertHousehold = typeof households.$inferInsert;
+
+export const householdMembers = mysqlTable("household_members", {
+  id: int("id").autoincrement().primaryKey(),
+  householdId: int("household_id").notNull().references(() => households.id, { onDelete: "cascade" }),
+  userId: int("user_id").notNull(),
+  role: varchar("role", { length: 32 }).default("member").notNull(),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+}, t => ({
+  userIdx: uniqueIndex("household_members_user_id_unique").on(t.userId),
+  householdIdx: index("household_members_household_id_idx").on(t.householdId),
+}));
+
+export type HouseholdMember = typeof householdMembers.$inferSelect;
+export type InsertHouseholdMember = typeof householdMembers.$inferInsert;

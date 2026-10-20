@@ -1,4 +1,5 @@
 import { ReorderButton } from "@/components/features/ReorderButton";
+import { HouseholdManager, HouseholdBanner } from "@/components/features/HouseholdManager";
 import DashboardLayout from "@/components/DashboardLayout";
 import { PageHeader } from "@/components/brand/PageHeader";
 import { StatusTag, type Tone } from "@/components/brand/StatusTag";
@@ -48,6 +49,7 @@ import {
   Snowflake,
   Soup,
   Trash2,
+  Users,
   UtensilsCrossed,
   Wheat,
   type LucideIcon,
@@ -92,6 +94,7 @@ export default function FridgeTracker() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const { data: items = [], isLoading } = trpc.inventory.list.useQuery();
+  const { data: householdData } = trpc.household.get.useQuery();
 
   // The storage alerts and the rescue recipes are derived from the same pantry, so refresh them with the list.
   const refreshPantry = () => {
@@ -277,6 +280,7 @@ export default function FridgeTracker() {
           description="Smart fridge & pantry management. Track expiry dates, eliminate food waste, and save money."
           actions={
             <>
+              <HouseholdManager />
               <Button variant="outline" asChild className="flex-1 sm:flex-none">
                 <Link href="/openfoodfacts">
                   <Barcode className="h-4 w-4" />
@@ -606,6 +610,12 @@ export default function FridgeTracker() {
                           <StorageIcon className="h-3.5 w-3.5" />
                           {storage.label}
                         </span>
+                        {householdData?.household && (
+                          <span className="inline-flex items-center gap-1 text-verdant-green font-semibold">
+                            <Users className="h-3 w-3" />
+                            Shared
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
