@@ -23,7 +23,8 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { playCleanChime, playWarningBuzz, playFeedbackForProduct, isAudioMuted, setAudioMuted, subscribeAudioMute, type FoodEvaluation } from "@/lib/scannerAudio";
 import { BarcodeScanner, type ScannedBarcode } from "@/components/BarcodeScanner";
 import { checkBarcode } from "@/lib/barcode";
 import { useLocation } from "wouter";

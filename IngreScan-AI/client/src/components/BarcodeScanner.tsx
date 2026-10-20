@@ -14,7 +14,8 @@ import {
   stopStream,
   type LiveScanHandle,
 } from "@/lib/barcodeDecode";
-import { AlertCircle, Barcode, Camera, CheckCircle2, Loader2, Upload, X } from "lucide-react";
+import { AlertCircle, Barcode, Camera, CheckCircle2, Loader2, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { playScanBeep, isAudioMuted, setAudioMuted, subscribeAudioMute } from "@/lib/scannerAudio";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ScannedBarcode = {
@@ -55,6 +56,9 @@ export function BarcodeScanner({ onDetected, disabled = false, initialValue = ""
   useEffect(() => {
     setManual(initialValue);
   }, [initialValue]);
+
+  const [muted, setMuted] = useState(() => isAudioMuted());
+  useEffect(() => subscribeAudioMute(setMuted), []);
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [liveHint, setLiveHint] = useState<string | null>(null);
@@ -288,6 +292,21 @@ export function BarcodeScanner({ onDetected, disabled = false, initialValue = ""
       <div className={cameraBusy ? "space-y-2" : "hidden"}>
         <div className="relative mx-auto aspect-[4/3] w-full max-w-xl overflow-hidden rounded-3xl bg-graphite">
           <video ref={videoRef} playsInline muted autoPlay className="h-full w-full object-cover" aria-label="Camera preview" data-testid="barcode-video" />
+          <div className="absolute top-3 right-3 z-10">
+            <button
+              type="button"
+              onClick={() => {
+                const next = !muted;
+                setMuted(next);
+                setAudioMuted(next);
+              }}
+              className="flex items-center gap-1.5 rounded-full bg-graphite/80 backdrop-blur-md px-3 py-1.5 text-xs font-bold text-white shadow-md hover:bg-graphite transition-all"
+              title={muted ? "Sound muted: Click to enable chimes" : "Sound ON: Click to mute"}
+            >
+              {muted ? <VolumeX className="h-3.5 w-3.5 text-signal-red-orange" /> : <Volume2 className="h-3.5 w-3.5 text-verdant-green" />}
+              <span>{muted ? "Muted" : "Chimes ON"}</span>
+            </button>
+          </div>
           <div className="pointer-events-none absolute inset-x-[10%] top-1/2 h-0.5 -translate-y-1/2 bg-ember-orange" aria-hidden="true" />
           <div className="pointer-events-none absolute inset-[12%] rounded-3xl border-2 border-white/80" aria-hidden="true" />
           {cameraState === "starting" && (

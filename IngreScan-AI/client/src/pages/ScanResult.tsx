@@ -9,7 +9,8 @@ import { PageHeader } from "@/components/brand/PageHeader";
 import { StatusTag, riskTone, scoreTone, type Tone } from "@/components/brand/StatusTag";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/components/qc/States";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { playCleanChime, playWarningBuzz } from "@/lib/scannerAudio";
 import { toast } from "sonner";
 import { AIChatBox } from "@/components/AIChatBox";
 import { HealthAlerts } from "@/components/features/HealthAlerts";
@@ -41,6 +42,22 @@ export default function ScanResult() {
   const [altListEl, setAltListEl] = useState<HTMLElement | null>(null);
   const altSeen = useSeenOnce(altListEl);
   const market = useAlternativeMarket(scanId, altSeen && (data?.alternatives.length ?? 0) > 0);
+
+  const playedAudioRef = useRef(false);
+  useEffect(() => {
+    if (data && data.scan && !playedAudioRef.current) {
+      playedAudioRef.current = true;
+      const score = data.scan.riskScore ?? 0;
+      const hasHazardous = (data.ingredients ?? []).some(
+        (i) => i.riskLevel === "severe" || i.riskLevel === "high"
+      );
+      if (hasHazardous || score >= 60) {
+        playWarningBuzz();
+      } else if (score <= 35) {
+        playCleanChime();
+      }
+    }
+  }, [data]);
 
   useEffect(() => {
     if (chatHistory) {
