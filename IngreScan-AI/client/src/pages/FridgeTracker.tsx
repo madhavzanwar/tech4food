@@ -1,3 +1,4 @@
+import { ReorderButton } from "@/components/features/ReorderButton";
 import DashboardLayout from "@/components/DashboardLayout";
 import { PageHeader } from "@/components/brand/PageHeader";
 import { StatusTag, type Tone } from "@/components/brand/StatusTag";
@@ -638,15 +639,20 @@ export default function FridgeTracker() {
 
                   {/* Actions */}
                   <div className="mt-auto flex items-center justify-between gap-2 border-t border-border px-3 py-2">
-                    <Button
-                      variant="ghost"
-                      className="px-3"
-                      disabled={consumeMutation.isPending || deleteMutation.isPending}
-                      onClick={() => consumeMutation.mutate({ id: item.id })}
-                    >
-                      <CheckCircle2 className="h-4 w-4 text-verdant-green" />
-                      Consumed
-                    </Button>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="ghost"
+                        className="px-3"
+                        disabled={consumeMutation.isPending || deleteMutation.isPending}
+                        onClick={() => consumeMutation.mutate({ id: item.id })}
+                      >
+                        <CheckCircle2 className="h-4 w-4 text-verdant-green" />
+                        Consumed
+                      </Button>
+
+                      {/* 1-Click Pantry-to-Cart Quick Commerce Restock */}
+                      <ReorderButton item={item.title} size="sm" variant="ghost" />
+                    </div>
 
                     <div className="flex items-center gap-1">
                       <Button

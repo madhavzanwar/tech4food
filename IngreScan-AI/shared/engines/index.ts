@@ -139,3 +139,19 @@ export type {
   VendorScore,
   VendorScorecard,
 } from "./qcGrading";
+
+export {
+  cleanItemQuery,
+  buildBlinkitUrl,
+  buildZeptoUrl,
+  buildInstacartUrl,
+  buildAmazonFreshUrl,
+  buildWhatsAppShoppingListUrl,
+  buildItemReorderLinks,
+  buildBatchReorderLinks,
+} from "./reorder";
+export type {
+  QuickCommerceProvider,
+  ReorderItem,
+  ReorderLink,
+} from "./reorder";
