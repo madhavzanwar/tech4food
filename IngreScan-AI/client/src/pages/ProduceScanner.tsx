@@ -213,8 +213,9 @@ export default function ProduceScanner() {
   const clearHistoryMutation = trpc.produce.clearHistory.useMutation();
 
   const loadInventory = async () => {
-    // Storage alerts are derived from the pantry, so they must follow every pantry change.
+    // Storage alerts and unified fridge tracker are derived from the pantry, so they must follow every pantry change.
     void utils.insights.ethyleneAlerts.invalidate();
+    void utils.inventory.list.invalidate();
     try {
       const data = await utils.produce.listInventory.fetch();
       setInventory(Array.isArray(data) ? (data as InventoryItem[]) : []);

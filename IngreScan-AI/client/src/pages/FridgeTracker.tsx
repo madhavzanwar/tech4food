@@ -26,11 +26,20 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
 import { localExpiry, toLocalDateInput } from "@/lib/utils";
 import {
   AlertTriangle,
   Apple,
+  ArrowUpDown,
   Barcode,
   Beef,
   CheckCircle2,
@@ -41,6 +50,9 @@ import {
   ExternalLink,
   Flame,
   IceCreamBowl,
+  LayoutGrid,
+  Leaf,
+  List,
   Milk,
   Package,
   Plus,
@@ -48,6 +60,7 @@ import {
   Search,
   Snowflake,
   Soup,
+  Sparkles,
   Trash2,
   Users,
   UtensilsCrossed,
@@ -57,6 +70,31 @@ import {
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
+
+export type UnifiedPantryItem = {
+  compositeId: string;
+  rawId: number;
+  kind: "produce" | "packaged";
+  userId?: number;
+  title: string;
+  category: string;
+  quantity: string;
+  storageLocation: "fridge" | "freezer" | "pantry";
+  imageUrl: string | null;
+  barcode: string | null;
+  expiryDate: string;
+  daysLeft: number;
+  status: "fresh" | "expiring_soon" | "expired" | "consumed";
+  notes?: string | null;
+  produceDetails?: {
+    fruitType: string;
+    freshness: "fresh" | "normal" | "rotten";
+    pFresh: number;
+    confidence: number;
+    storageTip?: string;
+  };
+  createdAt?: string | Date;
+};
 
 const CATEGORIES: { value: string; label: string; icon: LucideIcon }[] = [
   { value: "Dairy", label: "Dairy & Eggs", icon: Milk },
@@ -93,12 +131,18 @@ const STORAGE: Record<string, { label: string; long: string; icon: LucideIcon }>
 export default function FridgeTracker() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
-  const { data: items = [], isLoading } = trpc.inventory.list.useQuery();
+
+  // Unified data sources: Packaged Groceries + FreshGuard Produce AI Inventory
+  const { data: packagedItems = [], isLoading: isLoadingPackaged } = trpc.inventory.list.useQuery();
+  const { data: produceItems = [], isLoading: isLoadingProduce } = trpc.produce.listInventory.useQuery();
   const { data: householdData } = trpc.household.get.useQuery();
 
-  // The storage alerts and the rescue recipes are derived from the same pantry, so refresh them with the list.
+  const isLoading = isLoadingPackaged || isLoadingProduce;
+
+  // Refresh both inventories and storage intelligence alerts
   const refreshPantry = () => {
     void utils.inventory.list.invalidate();
+    void utils.produce.listInventory.invalidate();
     void utils.insights.ethyleneAlerts.invalidate();
   };
 
@@ -134,10 +178,24 @@ export default function FridgeTracker() {
     },
   });
 
+  const deleteProduceMutation = trpc.produce.deleteInventory.useMutation({
+    onSuccess: () => {
+      refreshPantry();
+      toast.success("Produce item removed / consumed!");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to remove produce item");
+    },
+  });
+
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [activeLocation, setActiveLocation] = useState<string>("all");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [selectedKind, setSelectedKind] = useState<"all" | "produce" | "packaged">("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"table" | "grid">("table");
+  const [sortBy, setSortBy] = useState<"expiry" | "name" | "status" | "category">("expiry");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   // Form State
   const [title, setTitle] = useState("");
@@ -193,15 +251,79 @@ export default function FridgeTracker() {
     });
   };
 
-  // Filtered Items
-  const activeItems = useMemo(() => {
-    return items
-      .filter((item) => item.status !== "consumed")
-      .map((item) => ({ ...item, ...localExpiry(item.expiryDate) }));
-  }, [items]);
+  // Cross-Pantry Merge: Unify packaged groceries and fresh produce
+  const unifiedItems: UnifiedPantryItem[] = useMemo(() => {
+    const list: UnifiedPantryItem[] = [];
 
+    // 1. Packaged groceries
+    for (const item of packagedItems) {
+      if (item.status === "consumed") continue;
+      const { daysLeft, status } = localExpiry(item.expiryDate);
+      list.push({
+        compositeId: `packaged:${item.id}`,
+        rawId: item.id,
+        kind: "packaged",
+        userId: item.userId,
+        title: item.title,
+        category: item.category || "Other",
+        quantity: item.quantity || "1",
+        storageLocation: (item.storageLocation as any) || "fridge",
+        imageUrl: item.foodImageUrl || null,
+        barcode: item.barcode || null,
+        expiryDate:
+          item.expiryDate instanceof Date
+            ? item.expiryDate.toISOString().slice(0, 10)
+            : String(item.expiryDate).slice(0, 10),
+        daysLeft,
+        status,
+        notes: item.notes || null,
+        createdAt: item.createdAt,
+      });
+    }
+
+    // 2. Fresh produce from FreshGuard AI
+    for (const item of produceItems) {
+      const daysLeft = item.days_left ?? 0;
+      const isExpired = item.freshness === "rotten" || daysLeft < 0;
+      const isExpiringSoon = !isExpired && daysLeft <= 3;
+      const status: "fresh" | "expiring_soon" | "expired" = isExpired
+        ? "expired"
+        : isExpiringSoon
+        ? "expiring_soon"
+        : "fresh";
+
+      list.push({
+        compositeId: `produce:${item.id}`,
+        rawId: item.id,
+        kind: "produce",
+        title: item.name || item.fruit_type,
+        category: "Produce",
+        quantity: "Fresh batch",
+        storageLocation: "fridge",
+        imageUrl: item.image_url || null,
+        barcode: null,
+        expiryDate: item.expiry_date,
+        daysLeft,
+        status,
+        notes: item.storage_tip || null,
+        produceDetails: {
+          fruitType: item.fruit_type,
+          freshness: item.freshness,
+          pFresh: item.p_fresh,
+          confidence: item.confidence,
+          storageTip: item.storage_tip,
+        },
+        createdAt: item.created_at,
+      });
+    }
+
+    return list;
+  }, [packagedItems, produceItems]);
+
+  // Filtered & Sorted Items
   const filteredItems = useMemo(() => {
-    return activeItems.filter((item) => {
+    const filtered = unifiedItems.filter((item) => {
+      const matchesKind = selectedKind === "all" || item.kind === selectedKind;
       const matchesLocation =
         activeLocation === "all" || item.storageLocation === activeLocation;
       const matchesCategory =
@@ -210,19 +332,53 @@ export default function FridgeTracker() {
       const matchesSearch =
         !searchQuery.trim() ||
         item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (item.notes && item.notes.toLowerCase().includes(searchQuery.toLowerCase()));
-      return matchesLocation && matchesCategory && matchesSearch;
+        (item.notes && item.notes.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (item.produceDetails?.fruitType &&
+          item.produceDetails.fruitType.toLowerCase().includes(searchQuery.toLowerCase()));
+      return matchesKind && matchesLocation && matchesCategory && matchesSearch;
     });
-  }, [activeItems, activeLocation, selectedCategory, searchQuery]);
+
+    return filtered.sort((a, b) => {
+      if (sortBy === "expiry") {
+        return sortDir === "asc" ? a.daysLeft - b.daysLeft : b.daysLeft - a.daysLeft;
+      }
+      if (sortBy === "name") {
+        return sortDir === "asc" ? a.title.localeCompare(b.title) : b.title.localeCompare(a.title);
+      }
+      if (sortBy === "category") {
+        return sortDir === "asc"
+          ? a.category.localeCompare(b.category)
+          : b.category.localeCompare(a.category);
+      }
+      if (sortBy === "status") {
+        const order = { expired: 0, expiring_soon: 1, fresh: 2, consumed: 3 };
+        return sortDir === "asc"
+          ? order[a.status] - order[b.status]
+          : order[b.status] - order[a.status];
+      }
+      return 0;
+    });
+  }, [unifiedItems, selectedKind, activeLocation, selectedCategory, searchQuery, sortBy, sortDir]);
 
   // Statistics
   const stats = useMemo(() => {
-    const total = activeItems.length;
-    const fresh = activeItems.filter((i) => i.status === "fresh").length;
-    const expiringSoon = activeItems.filter((i) => i.status === "expiring_soon").length;
-    const expired = activeItems.filter((i) => i.status === "expired").length;
-    return { total, fresh, expiringSoon, expired };
-  }, [activeItems]);
+    const total = unifiedItems.length;
+    const fresh = unifiedItems.filter((i) => i.status === "fresh").length;
+    const expiringSoon = unifiedItems.filter((i) => i.status === "expiring_soon").length;
+    const expired = unifiedItems.filter((i) => i.status === "expired").length;
+    const produceCount = unifiedItems.filter((i) => i.kind === "produce").length;
+    const packagedCount = unifiedItems.filter((i) => i.kind === "packaged").length;
+    return { total, fresh, expiringSoon, expired, produceCount, packagedCount };
+  }, [unifiedItems]);
+
+  const toggleSort = (col: "expiry" | "name" | "status" | "category") => {
+    if (sortBy === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(col);
+      setSortDir("asc");
+    }
+  };
 
   const getCategoryIcon = (catName: string): LucideIcon => {
     const match = CATEGORIES.find((c) => c.value.toLowerCase() === catName.toLowerCase());
@@ -238,9 +394,9 @@ export default function FridgeTracker() {
     valueClass: string;
   }[] = [
     {
-      label: "Total Tracked",
+      label: "Total Inventory",
       value: stats.total,
-      hint: "Active in your kitchen",
+      hint: `${stats.produceCount} fresh produce • ${stats.packagedCount} packaged`,
       icon: UtensilsCrossed,
       iconClass: "text-graphite",
       valueClass: "text-graphite",
@@ -275,12 +431,20 @@ export default function FridgeTracker() {
     <DashboardLayout>
       <div className="space-y-8 md:space-y-10">
         <PageHeader
-          eyebrow="Fridge & pantry"
+          eyebrow="Unified kitchen & pantry"
           title="Food Expiry Tracker"
-          description="Smart fridge & pantry management. Track expiry dates, eliminate food waste, and save money."
+          description="Cross-pantry inventory management. Fresh produce and packaged groceries live-synced in one unified hub."
           actions={
             <>
               <HouseholdManager />
+
+              <Button variant="outline" asChild className="flex-1 sm:flex-none">
+                <Link href="/produce">
+                  <Leaf className="h-4 w-4 text-verdant-green" />
+                  Scan Produce AI
+                </Link>
+              </Button>
+
               <Button variant="outline" asChild className="flex-1 sm:flex-none">
                 <Link href="/openfoodfacts">
                   <Barcode className="h-4 w-4" />
@@ -388,10 +552,10 @@ export default function FridgeTracker() {
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="item-qty">Quantity</Label>
+                          <Label htmlFor="item-quantity">Quantity</Label>
                           <Input
-                            id="item-qty"
-                            placeholder="e.g. 500g, 1 pack"
+                            id="item-quantity"
+                            placeholder="e.g., 500g, 2 packets"
                             value={quantity}
                             onChange={(e) => setQuantity(e.target.value)}
                           />
@@ -409,38 +573,51 @@ export default function FridgeTracker() {
                         </div>
 
                         <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="item-barcode">Barcode (Optional)</Label>
+                          <Input
+                            id="item-barcode"
+                            placeholder="Scan or type product barcode"
+                            value={barcode}
+                            onChange={(e) => setBarcode(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="space-y-2 sm:col-span-2">
                           <Label htmlFor="item-image">Image URL (Optional)</Label>
                           <Input
                             id="item-image"
-                            placeholder="https://..."
+                            placeholder="Paste product image URL"
                             value={foodImageUrl}
                             onChange={(e) => setFoodImageUrl(e.target.value)}
                           />
                         </div>
 
                         <div className="space-y-2 sm:col-span-2">
-                          <Label htmlFor="item-notes">Notes / Brand</Label>
+                          <Label htmlFor="item-notes">Notes (Optional)</Label>
                           <Textarea
                             id="item-notes"
-                            placeholder="e.g., Purchased from store, opened on Monday"
-                            rows={2}
+                            placeholder="e.g., Opened on Tuesday, keep sealed"
                             value={notes}
                             onChange={(e) => setNotes(e.target.value)}
+                            rows={2}
                           />
                         </div>
                       </div>
                     </div>
 
-                    <DialogFooter>
+                    <DialogFooter className="border-t border-fog pt-4">
                       <Button
                         type="button"
-                        variant="outline"
-                        onClick={() => setIsAddOpen(false)}
+                        variant="ghost"
+                        onClick={() => {
+                          setIsAddOpen(false);
+                          resetForm();
+                        }}
                       >
                         Cancel
                       </Button>
                       <Button type="submit" disabled={addMutation.isPending}>
-                        {addMutation.isPending ? "Adding..." : "Save to Tracker"}
+                        {addMutation.isPending ? "Adding..." : "Add to Tracker"}
                       </Button>
                     </DialogFooter>
                   </form>
@@ -450,16 +627,23 @@ export default function FridgeTracker() {
           }
         />
 
-        {/* Stats Row */}
-        <section aria-label="Tracker summary" className="grid grid-cols-2 gap-3 md:gap-4 lg:grid-cols-4">
+        <HouseholdBanner />
+
+        {/* Stats Grid */}
+        <section aria-label="Inventory summary" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {statTiles.map((t) => {
-            const TileIcon = t.icon;
+            const Icon = t.icon;
             return (
-              <div key={t.label} className="flex min-w-0 flex-col gap-4 rounded-3xl bg-white p-4 sm:p-6">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-bold text-graphite">{t.label}</p>
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-2xl bg-fog">
-                    <TileIcon className={`h-[18px] w-[18px] ${t.iconClass}`} />
+              <div
+                key={t.label}
+                className="flex flex-col justify-between rounded-3xl border border-border bg-white p-5 md:p-6"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    {t.label}
+                  </span>
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-fog">
+                    <Icon className={`h-5 w-5 ${t.iconClass}`} />
                   </span>
                 </div>
                 <div>
@@ -474,44 +658,73 @@ export default function FridgeTracker() {
         <RescueFridge />
         <EthyleneAlerts />
 
-        {/* Filter & Search Bar */}
+        {/* Filter & View Switcher Bar */}
         <div className="flex flex-col gap-3 rounded-3xl bg-white p-3 sm:p-4 lg:flex-row lg:items-center lg:justify-between">
-          <Tabs
-            value={activeLocation}
-            onValueChange={setActiveLocation}
-            className="w-full lg:w-auto"
-          >
-            <TabsList className="grid w-full grid-cols-4 lg:w-auto">
-              <TabsTrigger value="all" aria-controls={undefined} className="px-1.5 text-[13px] sm:px-3 sm:text-sm">
-                All Storage
-              </TabsTrigger>
-              <TabsTrigger value="fridge" aria-controls={undefined} className="px-1.5 text-[13px] sm:px-3 sm:text-sm">
-                <Refrigerator className="hidden h-4 w-4 sm:block" /> Fridge
-              </TabsTrigger>
-              <TabsTrigger value="freezer" aria-controls={undefined} className="px-1.5 text-[13px] sm:px-3 sm:text-sm">
-                <Snowflake className="hidden h-4 w-4 sm:block" /> Freezer
-              </TabsTrigger>
-              <TabsTrigger value="pantry" aria-controls={undefined} className="px-1.5 text-[13px] sm:px-3 sm:text-sm">
-                <Package className="hidden h-4 w-4 sm:block" /> Pantry
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Storage Location Tabs */}
+            <Tabs
+              value={activeLocation}
+              onValueChange={setActiveLocation}
+              className="w-full sm:w-auto"
+            >
+              <TabsList className="grid w-full grid-cols-4 sm:w-auto">
+                <TabsTrigger value="all" className="px-2 text-xs sm:px-3 sm:text-sm">
+                  All Storage
+                </TabsTrigger>
+                <TabsTrigger value="fridge" className="px-2 text-xs sm:px-3 sm:text-sm">
+                  <Refrigerator className="hidden h-4 w-4 sm:block" /> Fridge
+                </TabsTrigger>
+                <TabsTrigger value="freezer" className="px-2 text-xs sm:px-3 sm:text-sm">
+                  <Snowflake className="hidden h-4 w-4 sm:block" /> Freezer
+                </TabsTrigger>
+                <TabsTrigger value="pantry" className="px-2 text-xs sm:px-3 sm:text-sm">
+                  <Package className="hidden h-4 w-4 sm:block" /> Pantry
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            {/* Pantry Kind Filter (Unified cross-pantry) */}
+            <Select value={selectedKind} onValueChange={(v: any) => setSelectedKind(v)}>
+              <SelectTrigger className="w-full sm:w-[170px]" aria-label="Filter by pantry source">
+                <SelectValue placeholder="All Items" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">
+                  All ({stats.total})
+                </SelectItem>
+                <SelectItem value="produce">
+                  <div className="flex items-center gap-1.5">
+                    <Leaf className="h-3.5 w-3.5 text-verdant-green" />
+                    Produce ({stats.produceCount})
+                  </div>
+                </SelectItem>
+                <SelectItem value="packaged">
+                  <div className="flex items-center gap-1.5">
+                    <Package className="h-3.5 w-3.5 text-graphite" />
+                    Packaged ({stats.packagedCount})
+                  </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="relative w-full sm:flex-1 lg:w-64 lg:flex-none">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            {/* Search Input */}
+            <div className="relative w-full sm:flex-1 lg:w-60 lg:flex-none">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 type="search"
-                placeholder="Search food item..."
+                placeholder="Search food or produce..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
+                className="pl-9.5 text-sm"
                 aria-label="Search food item"
               />
             </div>
 
+            {/* Category Select */}
             <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-              <SelectTrigger className="w-full sm:w-[210px]" aria-label="Filter by category">
+              <SelectTrigger className="w-full sm:w-[180px]" aria-label="Filter by category">
                 <SelectValue placeholder="All Categories" />
               </SelectTrigger>
               <SelectContent>
@@ -527,13 +740,43 @@ export default function FridgeTracker() {
                 })}
               </SelectContent>
             </Select>
+
+            {/* View Mode Switcher (Table vs Grid) */}
+            <div className="flex items-center rounded-xl bg-fog p-1 border border-border shrink-0 self-end sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setViewMode("table")}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-all ${
+                  viewMode === "table"
+                    ? "bg-white text-graphite shadow-xs"
+                    : "text-muted-foreground hover:text-graphite"
+                }`}
+                title="Unified Table View"
+              >
+                <List className="h-4 w-4" />
+                <span className="hidden sm:inline">Table</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("grid")}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-all ${
+                  viewMode === "grid"
+                    ? "bg-white text-graphite shadow-xs"
+                    : "text-muted-foreground hover:text-graphite"
+                }`}
+                title="Card Grid View"
+              >
+                <LayoutGrid className="h-4 w-4" />
+                <span className="hidden sm:inline">Cards</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Food Items List */}
+        {/* Food Items Display */}
         {isLoading ? (
           <div role="status" className="rounded-3xl bg-white py-16 text-center text-muted-foreground">
-            Loading food inventory...
+            Loading unified food & produce inventory...
           </div>
         ) : filteredItems.length === 0 ? (
           <div className="flex flex-col items-center rounded-3xl bg-white px-5 py-14 text-center sm:py-16">
@@ -542,7 +785,7 @@ export default function FridgeTracker() {
             </span>
             <h3 className="fn-heading-sm mt-5 text-graphite">No food items found</h3>
             <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">
-              {searchQuery || selectedCategory !== "all" || activeLocation !== "all"
+              {searchQuery || selectedCategory !== "all" || activeLocation !== "all" || selectedKind !== "all"
                 ? "Try clearing your filters or search query to see your items."
                 : "Your tracker is empty! Start logging items to track freshness and receive expiration alerts."}
             </p>
@@ -551,15 +794,253 @@ export default function FridgeTracker() {
                 <Plus className="h-4 w-4" /> Add Food Item
               </Button>
               <Button variant="outline" asChild>
+                <Link href="/produce">
+                  <Leaf className="h-4 w-4 text-verdant-green" /> Scan Produce AI
+                </Link>
+              </Button>
+              <Button variant="outline" asChild>
                 <Link href="/openfoodfacts">
                   <Barcode className="h-4 w-4" /> Lookup Barcode
                 </Link>
               </Button>
             </div>
           </div>
+        ) : viewMode === "table" ? (
+          /* ================= UNIFIED INVENTORY TABLE ================= */
+          <div className="overflow-hidden rounded-3xl border border-border bg-white shadow-xs">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-fog/60 hover:bg-fog/60 border-b border-border">
+                  <TableHead
+                    onClick={() => toggleSort("name")}
+                    className="w-[280px] sm:w-[320px] font-bold text-graphite cursor-pointer select-none"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      Food Item
+                      <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    </span>
+                  </TableHead>
+                  <TableHead
+                    onClick={() => toggleSort("category")}
+                    className="font-bold text-graphite cursor-pointer select-none"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      Type & Category
+                      <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    </span>
+                  </TableHead>
+                  <TableHead className="font-bold text-graphite">Storage</TableHead>
+                  <TableHead
+                    onClick={() => toggleSort("expiry")}
+                    className="font-bold text-graphite cursor-pointer select-none"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      Freshness & Expiry
+                      <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    </span>
+                  </TableHead>
+                  <TableHead className="font-bold text-graphite">Quantity</TableHead>
+                  <TableHead className="text-right font-bold text-graphite">Actions & Restock</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredItems.map((item) => {
+                  const daysLeft = item.daysLeft ?? 0;
+                  const isExpired = item.status === "expired" || daysLeft < 0;
+                  const isExpiringSoon = !isExpired && (item.status === "expiring_soon" || daysLeft <= 3);
+                  const tone: Tone = isExpired ? "negative" : isExpiringSoon ? "caution" : "positive";
+                  const statusLabel = isExpired ? "Expired" : isExpiringSoon ? "Expiring soon" : "Fresh";
+                  const clockClass = isExpired
+                    ? "text-signal-red-orange"
+                    : isExpiringSoon
+                    ? "text-sunset-orange"
+                    : "text-verdant-green";
+                  const storage = STORAGE[item.storageLocation] ?? STORAGE.pantry;
+                  const StorageIcon = storage.icon;
+                  const CategoryIcon = getCategoryIcon(item.category);
+
+                  const isProduce = item.kind === "produce";
+
+                  const handleConsume = () => {
+                    if (isProduce) {
+                      deleteProduceMutation.mutate({ id: item.rawId });
+                    } else {
+                      consumeMutation.mutate({ id: item.rawId });
+                    }
+                  };
+
+                  const handleDelete = () => {
+                    if (isProduce) {
+                      deleteProduceMutation.mutate({ id: item.rawId });
+                    } else {
+                      deleteMutation.mutate({ id: item.rawId });
+                    }
+                  };
+
+                  return (
+                    <TableRow key={item.compositeId} className="hover:bg-fog/40 transition-colors">
+                      {/* Column 1: Food Item */}
+                      <TableCell className="py-3">
+                        <div className="flex items-center gap-3">
+                          {item.imageUrl ? (
+                            <img
+                              src={item.imageUrl}
+                              alt={item.title}
+                              className="h-10 w-10 shrink-0 rounded-xl bg-fog object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = "none";
+                              }}
+                            />
+                          ) : (
+                            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-fog">
+                              {isProduce ? (
+                                <Apple className="h-5 w-5 text-verdant-green" />
+                              ) : (
+                                <CategoryIcon className="h-5 w-5 text-ember-orange" />
+                              )}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-sm text-graphite truncate max-w-[200px]">
+                                {item.title}
+                              </span>
+                              {householdData?.household && (
+                                <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-verdant-green bg-verdant-green/10 px-1.5 py-0.5 rounded-md">
+                                  <Users className="h-2.5 w-2.5" /> Shared
+                                </span>
+                              )}
+                            </div>
+                            {isProduce && item.produceDetails ? (
+                              <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
+                                <Sparkles className="h-3 w-3 text-ember-orange" />
+                                <span>FreshGuard AI: {Math.round(item.produceDetails.pFresh)}% fresh</span>
+                              </p>
+                            ) : item.notes ? (
+                              <p className="text-xs text-muted-foreground truncate max-w-[220px]">
+                                {item.notes}
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                      </TableCell>
+
+                      {/* Column 2: Type & Category */}
+                      <TableCell className="py-3">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                              isProduce
+                                ? "bg-verdant-green/15 text-verdant-green"
+                                : "bg-fog text-graphite"
+                            }`}
+                          >
+                            {isProduce ? (
+                              <Leaf className="h-3 w-3" />
+                            ) : (
+                              <Package className="h-3 w-3" />
+                            )}
+                            {isProduce ? "Produce" : "Packaged"}
+                          </span>
+                          <span className="text-xs text-muted-foreground hidden sm:inline">
+                            {item.category}
+                          </span>
+                        </div>
+                      </TableCell>
+
+                      {/* Column 3: Storage */}
+                      <TableCell className="py-3">
+                        <div className="flex items-center gap-1.5 text-xs text-graphite font-medium">
+                          <StorageIcon className="h-4 w-4 text-muted-foreground" />
+                          <span>{storage.label}</span>
+                        </div>
+                      </TableCell>
+
+                      {/* Column 4: Freshness & Expiry */}
+                      <TableCell className="py-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <StatusTag tone={tone} className="text-xs">
+                              {statusLabel}
+                            </StatusTag>
+                            <span className={`text-xs font-bold ${clockClass} flex items-center gap-1`}>
+                              <Clock className="h-3 w-3" />
+                              {daysLeft === 0
+                                ? "Today!"
+                                : isExpired
+                                ? `${Math.abs(daysLeft)}d ago`
+                                : `${daysLeft}d left`}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {new Date(item.expiryDate).toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              timeZone: "UTC",
+                            })}
+                          </p>
+                        </div>
+                      </TableCell>
+
+                      {/* Column 5: Quantity */}
+                      <TableCell className="py-3 text-xs text-graphite">
+                        {item.quantity}
+                      </TableCell>
+
+                      {/* Column 6: Actions & Restock */}
+                      <TableCell className="py-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs font-semibold text-verdant-green hover:bg-verdant-green/10"
+                            onClick={handleConsume}
+                            title="Mark as consumed"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                            Consumed
+                          </Button>
+
+                          {/* 1-Click Pantry-to-Cart Quick Commerce */}
+                          <ReorderButton item={item.title} size="sm" variant="ghost" />
+
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs text-muted-foreground hover:text-graphite"
+                            onClick={() => {
+                              if (isProduce) {
+                                setLocation("/produce");
+                              } else {
+                                setLocation(`/scanner?prefill=${encodeURIComponent(item.title)}`);
+                              }
+                            }}
+                            title={isProduce ? "Inspect with FreshGuard AI" : "Scan nutrition label"}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Button>
+
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-signal-red-orange hover:bg-signal-red-orange/10"
+                            onClick={handleDelete}
+                            title="Delete item"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
         ) : (
+          /* ================= UNIFIED CARD GRID VIEW ================= */
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-5 xl:grid-cols-3">
-            {filteredItems.map((item: any) => {
+            {filteredItems.map((item) => {
               const daysLeft = item.daysLeft ?? 0;
               const isExpired = item.status === "expired" || daysLeft < 0;
               const isExpiringSoon = !isExpired && (item.status === "expiring_soon" || daysLeft <= 3);
@@ -574,15 +1055,33 @@ export default function FridgeTracker() {
               const StorageIcon = storage.icon;
               const CategoryIcon = getCategoryIcon(item.category);
 
+              const isProduce = item.kind === "produce";
+
+              const handleConsume = () => {
+                if (isProduce) {
+                  deleteProduceMutation.mutate({ id: item.rawId });
+                } else {
+                  consumeMutation.mutate({ id: item.rawId });
+                }
+              };
+
+              const handleDelete = () => {
+                if (isProduce) {
+                  deleteProduceMutation.mutate({ id: item.rawId });
+                } else {
+                  deleteMutation.mutate({ id: item.rawId });
+                }
+              };
+
               return (
                 <article
-                  key={item.id}
+                  key={item.compositeId}
                   className="flex min-w-0 flex-col rounded-3xl border border-border bg-white"
                 >
                   <div className="flex items-start gap-4 p-5 pb-4">
-                    {item.foodImageUrl ? (
+                    {item.imageUrl ? (
                       <img
-                        src={item.foodImageUrl}
+                        src={item.imageUrl}
                         alt={item.title}
                         className="h-14 w-14 shrink-0 rounded-2xl bg-fog object-cover"
                         onError={(e) => {
@@ -591,7 +1090,11 @@ export default function FridgeTracker() {
                       />
                     ) : (
                       <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-fog">
-                        <CategoryIcon className="h-6 w-6 text-ember-orange" />
+                        {isProduce ? (
+                          <Apple className="h-6 w-6 text-verdant-green" />
+                        ) : (
+                          <CategoryIcon className="h-6 w-6 text-ember-orange" />
+                        )}
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
@@ -604,7 +1107,17 @@ export default function FridgeTracker() {
                         </StatusTag>
                       </div>
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                        <span className="font-bold text-graphite">{item.category}</span>
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                            isProduce
+                              ? "bg-verdant-green/15 text-verdant-green"
+                              : "bg-fog text-graphite"
+                          }`}
+                        >
+                          {isProduce ? <Leaf className="h-3 w-3" /> : <Package className="h-3 w-3" />}
+                          {isProduce ? "Produce" : "Packaged"}
+                        </span>
+                        <span>{item.category}</span>
                         <span>Qty: {item.quantity}</span>
                         <span className="inline-flex items-center gap-1">
                           <StorageIcon className="h-3.5 w-3.5" />
@@ -640,11 +1153,16 @@ export default function FridgeTracker() {
                       </span>
                     </div>
 
-                    {item.notes && (
+                    {isProduce && item.produceDetails ? (
+                      <p className="flex items-center gap-1 text-xs text-verdant-green font-semibold">
+                        <Sparkles className="h-3.5 w-3.5 text-ember-orange" />
+                        FreshGuard AI: {Math.round(item.produceDetails.pFresh)}% freshness score
+                      </p>
+                    ) : item.notes ? (
                       <p className="line-clamp-2 text-xs italic text-muted-foreground">
                         &ldquo;{item.notes}&rdquo;
                       </p>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* Actions */}
@@ -654,7 +1172,7 @@ export default function FridgeTracker() {
                         variant="ghost"
                         className="px-3"
                         disabled={consumeMutation.isPending || deleteMutation.isPending}
-                        onClick={() => consumeMutation.mutate({ id: item.id })}
+                        onClick={handleConsume}
                       >
                         <CheckCircle2 className="h-4 w-4 text-verdant-green" />
                         Consumed
@@ -669,7 +1187,11 @@ export default function FridgeTracker() {
                         variant="ghost"
                         className="px-3 text-muted-foreground hover:text-graphite"
                         onClick={() => {
-                          setLocation(`/scanner?prefill=${encodeURIComponent(item.title)}`);
+                          if (isProduce) {
+                            setLocation("/produce");
+                          } else {
+                            setLocation(`/scanner?prefill=${encodeURIComponent(item.title)}`);
+                          }
                         }}
                       >
                         Scan <ExternalLink className="h-3.5 w-3.5" />
@@ -681,7 +1203,7 @@ export default function FridgeTracker() {
                         aria-label={`Remove ${item.title}`}
                         className="text-signal-red-orange"
                         disabled={consumeMutation.isPending || deleteMutation.isPending}
-                        onClick={() => deleteMutation.mutate({ id: item.id })}
+                        onClick={handleDelete}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
