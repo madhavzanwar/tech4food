@@ -103,9 +103,9 @@ export async function runReminders(args: {
   let failed = 0;
   for (const d of due) {
     try {
-      await args.store.markReminded(d.phone, d.localDate);
       if (d.mode === "session") await args.sender.sendText(d.phone, d.text!);
       else await args.sender.sendTemplate(d.phone, d.template!);
+      await args.store.markReminded(d.phone, d.localDate);
       sent++;
     } catch (err) {
       failed++;

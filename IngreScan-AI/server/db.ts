@@ -154,13 +154,14 @@ export async function addMedicalCondition(condition: InsertMedicalCondition) {
   return writeResult(ctx, result);
 }
 
-export async function deleteMedicalCondition(id: number, userId: number) {
+export async function deleteMedicalCondition(id: number, userId: number): Promise<number> {
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
-  await db.delete(s.medicalConditions).where(
+  const result = await db.delete(s.medicalConditions).where(
     and(eq(s.medicalConditions.id, id), eq(s.medicalConditions.userId, userId))
   );
+  return affectedRows(ctx, result);
 }
 
 // ============= Medications =============
@@ -184,22 +185,24 @@ export async function addMedication(medication: InsertMedication) {
   return writeResult(ctx, result);
 }
 
-export async function updateMedication(id: number, userId: number, updates: Partial<InsertMedication>) {
+export async function updateMedication(id: number, userId: number, updates: Partial<InsertMedication>): Promise<number> {
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
-  await db.update(s.medications)
+  const result = await db.update(s.medications)
     .set({ ...updates, updatedAt: new Date() })
     .where(and(eq(s.medications.id, id), eq(s.medications.userId, userId)));
+  return affectedRows(ctx, result);
 }
 
-export async function deleteMedication(id: number, userId: number) {
+export async function deleteMedication(id: number, userId: number): Promise<number> {
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
-  await db.delete(s.medications).where(
+  const result = await db.delete(s.medications).where(
     and(eq(s.medications.id, id), eq(s.medications.userId, userId))
   );
+  return affectedRows(ctx, result);
 }
 
 // ============= Food Scans =============
@@ -240,6 +243,14 @@ export async function updateFoodScan(scanId: number, userId: number, updates: Pa
   const { db, s } = ctx;
   await db.update(s.foodScans)
     .set({ ...updates, updatedAt: new Date() })
+    .where(and(eq(s.foodScans.id, scanId), eq(s.foodScans.userId, userId)));
+}
+
+export async function deleteFoodScan(scanId: number, userId: number) {
+  const ctx = await getCtx();
+  if (!ctx) throw new Error("Database not available");
+  const { db, s } = ctx;
+  await db.delete(s.foodScans)
     .where(and(eq(s.foodScans.id, scanId), eq(s.foodScans.userId, userId)));
 }
 
@@ -373,21 +384,23 @@ export async function updateInventoryItem(
   id: number,
   userId: number,
   updates: Partial<InsertFoodInventoryItem>
-) {
+): Promise<number> {
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
-  await db.update(s.foodInventory)
+  const result = await db.update(s.foodInventory)
     .set({ ...updates, updatedAt: new Date() })
     .where(and(eq(s.foodInventory.id, id), eq(s.foodInventory.userId, userId)));
+  return affectedRows(ctx, result);
 }
 
-export async function deleteInventoryItem(id: number, userId: number) {
+export async function deleteInventoryItem(id: number, userId: number): Promise<number> {
   const ctx = await getCtx();
   if (!ctx) throw new Error("Database not available");
   const { db, s } = ctx;
-  await db.delete(s.foodInventory)
+  const result = await db.delete(s.foodInventory)
     .where(and(eq(s.foodInventory.id, id), eq(s.foodInventory.userId, userId)));
+  return affectedRows(ctx, result);
 }
 
 // ============= FreshGuard produce (per-user pantry + history) =============

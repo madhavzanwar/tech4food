@@ -42,9 +42,36 @@ CORS(app)
 app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB max
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+def _determine_device() -> str:
+    requested = os.environ.get("FRESHGUARD_DEVICE", "").strip().lower()
+    if requested:
+        if requested.startswith("cuda"):
+            try:
+                if torch.cuda.is_available():
+                    return requested
+                else:
+                    print(f"[!] FRESHGUARD_DEVICE='{requested}' requested, but CUDA is not available. Falling back to CPU.")
+                    return "cpu"
+            except Exception as e:
+                print(f"[!] CUDA check failed ({e}). Falling back to CPU.")
+                return "cpu"
+        return requested
+    try:
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception as e:
+        print(f"[!] CUDA availability check failed: {e}. Falling back to CPU.")
+        return "cpu"
+
+DEVICE = _determine_device()
 
 # --- Database Initialization ---
+def get_db_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
+    return conn
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -97,7 +124,7 @@ FRESHGUARD_PORT = _port_from_env()
 def prune_uploads(max_age_days: int = UPLOAD_MAX_AGE_DAYS):
     """Delete old uploaded scan images that no inventory item or history row references."""
     try:
-        with closing(sqlite3.connect(DB_PATH)) as conn:
+        with closing(get_db_connection()) as conn:
             referenced = set()
             for table in ("inventory", "scan_history"):
                 for (url,) in conn.execute(f"SELECT image_url FROM {table} WHERE image_url IS NOT NULL"):
@@ -142,21 +169,39 @@ class MultiTaskEffB0(nn.Module):
         return self.head_fruit(feat), self.head_fresh(feat)
 
 # --- Model Loader ---
-print(f"[*] Loading FreshGuard model on device: {DEVICE}...")
-try:
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True)
-except Exception:
-    # Fallback for checkpoints that pickle non-tensor objects (trusted local file)
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
+def _load_model():
+    global DEVICE
+    print(f"[*] Loading FreshGuard model on device: {DEVICE}...")
+    try:
+        try:
+            ckpt = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True)
+        except Exception:
+            ckpt = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
+        m = MultiTaskEffB0(len(ckpt["fruit_names"]), len(ckpt["fresh_labels"]))
+        m.load_state_dict(ckpt["model_state"])
+        m.to(DEVICE)
+        m.eval()
+        return m, ckpt
+    except Exception as e:
+        if DEVICE != "cpu":
+            print(f"[!] Failed to load model on {DEVICE}: {e}. Falling back to CPU...")
+            DEVICE = "cpu"
+            try:
+                ckpt = torch.load(MODEL_PATH, map_location="cpu", weights_only=True)
+            except Exception:
+                ckpt = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
+            m = MultiTaskEffB0(len(ckpt["fruit_names"]), len(ckpt["fresh_labels"]))
+            m.load_state_dict(ckpt["model_state"])
+            m.to("cpu")
+            m.eval()
+            return m, ckpt
+        raise
+
+model, checkpoint = _load_model()
 FRUIT_NAMES = checkpoint["fruit_names"]
 FRESH_LABELS = checkpoint["fresh_labels"]
 FRESH_IDX = FRESH_LABELS.index("fresh")
-
-model = MultiTaskEffB0(len(FRUIT_NAMES), len(FRESH_LABELS))
-model.load_state_dict(checkpoint["model_state"])
-model.to(DEVICE)
-model.eval()
-print(f"[+] FreshGuard model loaded! Fruits: {FRUIT_NAMES}")
+print(f"[+] FreshGuard model loaded on {DEVICE}! Fruits: {FRUIT_NAMES}")
 
 # --- Image Preprocessing ---
 inference_transform = transforms.Compose([
@@ -171,7 +216,18 @@ inference_transform = transforms.Compose([
 def to_rgb(image: Image.Image) -> Image.Image:
     """EXIF-upright RGB copy. Pillow's convert("RGB") clips 16-bit/int/float grayscale (modes I;16, I, F)
     to 0..255, which turns a 16-bit PNG almost entirely white; scale those modes to 8 bit first."""
-    image = ImageOps.exif_transpose(image)
+    try:
+        transposed = ImageOps.exif_transpose(image)
+        if transposed is not None:
+            image = transposed
+    except Exception:
+        pass
+
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        canvas = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        image = Image.alpha_composite(canvas, rgba)
+
     if image.mode.startswith("I") or image.mode == "F":
         arr = np.asarray(image, dtype=np.float64)
         top = float(arr.max()) if arr.size else 0.0
@@ -251,9 +307,29 @@ def _englishify_row(row):
     return row
 
 # --- Routes ---
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return jsonify({"status": "ok", "device": DEVICE})
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+def _parse_persist(raw_val, default: bool = True) -> bool:
+    if raw_val is None:
+        return default
+    if isinstance(raw_val, bool):
+        return raw_val
+    if isinstance(raw_val, (int, float)):
+        return raw_val != 0
+    s = str(raw_val).strip().lower()
+    if s in ("0", "false", "no", "off"):
+        return False
+    if s in ("1", "true", "yes", "on"):
+        return True
+    return default
+
 
 def _bad_request(msg, code=400):
     return jsonify({"error": msg}), code
@@ -339,8 +415,13 @@ def predict():
         # Save to this service's own scan history, used only by the standalone page.
         # The IngreScan web app sends persist=0 and stores history per user in MySQL instead.
         # A photo flagged as not produce is not written to the standalone history (the response still carries it).
-        if request.args.get("persist", "1") != "0" and result["is_produce"]:
-            with closing(sqlite3.connect(DB_PATH)) as conn:
+        persist_val = request.args.get("persist")
+        if persist_val is None and isinstance(body, dict):
+            persist_val = body.get("persist")
+        persist_flag = _parse_persist(persist_val, default=True)
+
+        if persist_flag and result["is_produce"]:
+            with closing(get_db_connection()) as conn:
                 conn.execute("""
                     INSERT INTO scan_history (fruit_type, fruit_name_kr, freshness, freshness_kr, p_fresh, confidence, image_url)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -488,13 +569,17 @@ def detect_items():
 
         def handle(box, label, score, second_pass):
             left, top, right, bottom = det.pad_box(box, width, height)
+            if right <= left or bottom <= top:
+                return
             crop = image.crop((left, top, right, bottom))
+            if crop.width <= 0 or crop.height <= 0:
+                return
             result = run_inference(crop)
             x1, y1, x2, y2 = box
             base = {
                 "box": {"x": round(float(x1), 1), "y": round(float(y1), 1),
                         "w": round(float(x2 - x1), 1), "h": round(float(y2 - y1), 1)},
-                "detector_label": label,
+                "detector_label": label or ("second_pass" if second_pass else "unknown"),
                 "detector_score": round(score * 100, 1) if score is not None else None,
                 "source": "second_pass" if second_pass else "detector",
             }
@@ -583,7 +668,7 @@ def inventory():
         p_fresh = min(max(_to_float(data.get("p_fresh"), 90.0), 0.0), 100.0)
         confidence = min(max(_to_float(data.get("confidence"), 95.0), 0.0), 100.0)
         image_url = str(data.get("image_url") or "")
-        storage_tip = str(data.get("storage_tips") or "")
+        storage_tip = str(data.get("storage_tip") or data.get("storage_tips") or "")
 
         expiry_date = str(data.get("expiry_date") or "")[:10]
         days_left = _days_until(expiry_date) if expiry_date else None
@@ -592,7 +677,7 @@ def inventory():
             expiry_date = (date.today() + timedelta(days=max(days_left, 0))).isoformat()
         days_left = max(days_left, 0)
 
-        with closing(sqlite3.connect(DB_PATH)) as conn:
+        with closing(get_db_connection()) as conn:
             cursor = conn.execute("""
                 INSERT INTO inventory (name, fruit_type, freshness, p_fresh, confidence, image_url, expiry_date, days_left, storage_tip)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -602,7 +687,7 @@ def inventory():
         return jsonify({"success": True, "id": new_id})
 
     # GET inventory
-    with closing(sqlite3.connect(DB_PATH)) as conn:
+    with closing(get_db_connection()) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM inventory ORDER BY id DESC").fetchall()
     items = [_englishify_row(dict(row)) for row in rows]
@@ -615,7 +700,7 @@ def inventory():
 
 @app.route("/api/inventory/<int:item_id>", methods=["DELETE"])
 def delete_inventory_item(item_id):
-    with closing(sqlite3.connect(DB_PATH)) as conn:
+    with closing(get_db_connection()) as conn:
         cur = conn.execute("DELETE FROM inventory WHERE id = ?", (item_id,))
         conn.commit()
         deleted = cur.rowcount
@@ -625,7 +710,7 @@ def delete_inventory_item(item_id):
 
 @app.route("/api/history", methods=["GET", "DELETE"])
 def history():
-    with closing(sqlite3.connect(DB_PATH)) as conn:
+    with closing(get_db_connection()) as conn:
         conn.row_factory = sqlite3.Row
         if request.method == "DELETE":
             conn.execute("DELETE FROM scan_history")

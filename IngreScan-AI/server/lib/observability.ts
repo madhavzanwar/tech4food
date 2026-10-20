@@ -224,13 +224,24 @@ export function installProcessHandlers(opts: { server: Server; state: HealthStat
     }, timeoutMs);
     force.unref();
     try {
-      await new Promise<void>(resolve => {
-        server.close(() => resolve());
+      await new Promise<void>((resolve, reject) => {
+        let sweep: NodeJS.Timeout | undefined;
+        const cleanup = () => {
+          if (sweep) {
+            clearInterval(sweep);
+            sweep = undefined;
+          }
+        };
+        server.close(err => {
+          cleanup();
+          if (err) reject(err);
+          else resolve();
+        });
         (server as any).closeIdleConnections?.();
         // Keep-alive connections that become idle after the first sweep.
-        const sweep = setInterval(() => (server as any).closeIdleConnections?.(), 250);
+        sweep = setInterval(() => (server as any).closeIdleConnections?.(), 250);
         sweep.unref();
-        server.once("close", () => clearInterval(sweep));
+        server.once("close", cleanup);
       });
       await opts.onShutdown?.();
       await sentry?.flush?.(2000);

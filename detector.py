@@ -164,6 +164,18 @@ def pad_box(box, width: int, height: int, pad: float = CROP_PAD) -> tuple[int, i
     top = int(max(0, np.floor(y1 - ph)))
     right = int(min(width, np.ceil(x2 + pw)))
     bottom = int(min(height, np.ceil(y2 + ph)))
+    if width > 0 and right <= left:
+        if left < width:
+            right = min(width, left + 1)
+        else:
+            left = max(0, width - 1)
+            right = width
+    if height > 0 and bottom <= top:
+        if top < height:
+            bottom = min(height, top + 1)
+        else:
+            top = max(0, height - 1)
+            bottom = height
     return left, top, right, bottom
 
 

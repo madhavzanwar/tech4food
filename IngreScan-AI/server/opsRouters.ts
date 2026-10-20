@@ -21,7 +21,7 @@ import { protectedProcedure, router } from "./_core/trpc";
 import { invokeLLM, isRealLLMConfigured } from "./_core/llm";
 import * as db from "./db";
 import * as dbf from "./dbFeatures";
-import { getLLMText, isValidYmd, parseTimestampInput } from "./logic";
+import { getLLMText, isValidYmd, parseTimestampInput, computeExpiry } from "./logic";
 
 const FRESHNESS = z.enum(["fresh", "normal", "rotten"]);
 
@@ -270,7 +270,9 @@ export const receiptRouter = router({
         if (!expiry) throw new TRPCError({ code: "BAD_REQUEST", message: `Invalid expiry date for "${item.name}"` });
         return { item, expiry };
       });
+      const now = new Date();
       for (const { item, expiry } of prepared) {
+        const { status } = computeExpiry(expiry, now);
         await db.addInventoryItem({
           userId: ctx.user.id,
           title: item.name,
@@ -279,6 +281,7 @@ export const receiptRouter = router({
           storageLocation: item.storageLocation,
           expiryDate: expiry,
           notes: "Imported from receipt",
+          status,
         });
       }
       return { imported: prepared.length };

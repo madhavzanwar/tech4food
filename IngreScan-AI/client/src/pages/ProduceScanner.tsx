@@ -10,7 +10,7 @@ import { Progress } from "@/components/ui/progress";
 import { useState, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { toLocalDateInput } from "@/lib/utils";
+import { localExpiry, toLocalDateInput } from "@/lib/utils";
 import {
   classifyOnDevice,
   ensureOnDeviceModel,
@@ -92,15 +92,10 @@ function formatDbTimestamp(ts?: string): string {
   return isNaN(d.getTime()) ? ts : d.toLocaleString();
 }
 
-// Days remaining until a YYYY-MM-DD expiry (local), falling back to the stored value.
+// Days remaining until an expiry date in the user's local timezone, falling back to the stored value.
 function daysUntil(expiry: string | undefined, fallback: number): number {
   if (!expiry) return fallback;
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(expiry);
-  if (!m) return fallback;
-  const target = new Date(+m[1], +m[2] - 1, +m[3]).getTime();
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  return Math.round((target - today) / 86400000);
+  return localExpiry(expiry).daysLeft;
 }
 
 interface HistoryItem {
@@ -568,9 +563,11 @@ export default function ProduceScanner() {
             </div>
             {scanMode === "shelf" ? (
               <ShelfScan
-                onAdded={async () => {
+                onAdded={async (allAdded) => {
                   await loadInventory();
-                  setActiveTab("inventory");
+                  if (allAdded) {
+                    setActiveTab("inventory");
+                  }
                 }}
                 onUseSingle={() => setScanMode("single")}
               />

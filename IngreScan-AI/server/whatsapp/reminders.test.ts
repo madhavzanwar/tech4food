@@ -199,6 +199,6 @@ describe("runReminders", () => {
     const res = await runReminders({ store, sender, config, now, log: (_l, m, meta) => logs.push(m + JSON.stringify(meta)) });
     expect(res).toEqual({ due: 1, sent: 0, failed: 1 });
     expect(logs[0]).toContain("reminder_send_failed");
-    expect((await runReminders({ store, sender, config, now })).due).toBe(0);
+    expect((await runReminders({ store, sender, config, now })).due).toBe(1);
   });
 });

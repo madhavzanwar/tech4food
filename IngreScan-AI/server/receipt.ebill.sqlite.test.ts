@@ -25,7 +25,11 @@ afterAll(async () => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    // ignore EPERM / EBUSY lock errors on Windows
+  }
 });
 
 async function user(openId: string) {

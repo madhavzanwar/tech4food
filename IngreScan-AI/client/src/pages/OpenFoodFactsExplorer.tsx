@@ -38,6 +38,12 @@ const SAMPLE_BARCODES = [
   { code: "8901262010047", name: "Amul Butter Pasteurized", region: "India" },
 ];
 
+function formatProductTitle(brand?: string | null, productName?: string | null): string {
+  const cleanBrand = brand && brand.toLowerCase() !== "generic" ? brand.trim() : "";
+  const cleanName = productName?.trim() ?? "";
+  return [cleanBrand, cleanName].filter(Boolean).join(" ");
+}
+
 export default function OpenFoodFactsExplorer() {
   const [, setLocation] = useLocation();
   const [barcodeInput, setBarcodeInput] = useState("8901030895470");
@@ -131,7 +137,7 @@ export default function OpenFoodFactsExplorer() {
     setBridging(true);
     try {
       const scanRes = await createScanMutation.mutateAsync({
-        productName: `${product.brand ? product.brand + " " : ""}${product.productName}`,
+        productName: formatProductTitle(product.brand, product.productName),
         inputType: "text",
         rawIngredients: product.ingredientsText,
         imageUrl: product.imageUrl || undefined,
@@ -160,7 +166,7 @@ export default function OpenFoodFactsExplorer() {
       expiry.setDate(expiry.getDate() + 14); // 2 weeks default
 
       await addToInventoryMutation.mutateAsync({
-        title: `${product.brand ? product.brand + " " : ""}${product.productName}`,
+        title: formatProductTitle(product.brand, product.productName),
         category: product.category || "Snacks",
         quantity: "1 pack",
         storageLocation: "pantry",
@@ -178,7 +184,7 @@ export default function OpenFoodFactsExplorer() {
 
 
   // Nutri-Score / Eco-Score grades and NOVA groups keep their familiar
-  // green → red order, mapped onto the brand palette (white letter on solid fill).
+  // green â†’ red order, mapped onto the brand palette (white letter on solid fill).
   const getNutriscoreColor = (grade: string | null) => {
     switch (grade) {
       case "A":
@@ -364,7 +370,7 @@ export default function OpenFoodFactsExplorer() {
                       <div className="min-w-0 space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <StatusTag className="font-mono">Barcode: {product.barcode}</StatusTag>
-                          {product.brand && <StatusTag tone="brand">{product.brand}</StatusTag>}
+                          {product.brand && product.brand.toLowerCase() !== "generic" && <StatusTag tone="brand">{product.brand}</StatusTag>}
                         </div>
                         <h2 className="fn-heading-sm break-words text-graphite">
                           {product.productName}
@@ -644,7 +650,7 @@ export default function OpenFoodFactsExplorer() {
                           {item.productName}
                         </h3>
                         <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                          {item.brand || "Generic"} · {item.category}
+                          {[item.brand && item.brand.toLowerCase() !== "generic" ? item.brand : null, item.category].filter(Boolean).join(" · ")}
                         </p>
                         <div className="mt-2.5 flex flex-wrap items-center gap-2">
                           {item.nutriscoreGrade && (
@@ -698,7 +704,7 @@ export default function OpenFoodFactsExplorer() {
                             setBridging(true);
                             try {
                               const scanRes = await createScanMutation.mutateAsync({
-                                productName: `${item.brand ? item.brand + " " : ""}${item.productName}`,
+                                productName: formatProductTitle(item.brand, item.productName),
                                 inputType: "text",
                                 rawIngredients: item.ingredientsText,
                                 imageUrl: item.imageUrl || undefined,

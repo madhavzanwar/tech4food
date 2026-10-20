@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-ROOT = __file__.rsplit("/tests/", 1)[0]
+from pathlib import Path
+ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -522,3 +523,76 @@ def test_unexpected_error_is_json_not_html(client, appmod, monkeypatch):
 def test_port_env_parsing(appmod, monkeypatch, raw, expected):
     monkeypatch.setenv("FRESHGUARD_PORT", raw)
     assert appmod._port_from_env() == expected
+
+
+def test_healthz_endpoint(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["status"] == "ok"
+    assert "device" in data
+
+
+def test_to_rgb_corrupt_exif(appmod):
+    # Bug P-3: Corrupt EXIF metadata should not raise
+    img = Image.new("RGB", (30, 30), "red")
+    # Calling to_rgb should succeed
+    rgb = appmod.to_rgb(img)
+    assert rgb.mode == "RGB"
+
+
+def test_to_rgb_transparency_white_background(appmod):
+    # Bug P-4: Transparency should be composited onto white background
+    img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))  # fully transparent black
+    rgb = appmod.to_rgb(img)
+    assert rgb.mode == "RGB"
+    # Should be white (255, 255, 255), not pitch black (0, 0, 0)
+    assert rgb.getpixel((5, 5)) == (255, 255, 255)
+
+
+def test_sqlite_wal_and_busy_timeout(appmod):
+    # Bug P-5: Connection must have WAL and busy_timeout
+    conn = appmod.get_db_connection()
+    mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+    timeout = conn.execute("PRAGMA busy_timeout;").fetchone()[0]
+    conn.close()
+    assert mode.lower() == "wal"
+    assert timeout == 5000
+
+
+@pytest.mark.parametrize("persist_val", ["0", "false", "no", "off", "False", "NO"])
+def test_predict_persist_false_query(client, appmod, persist_val):
+    # Bug P-6: Robust persist parsing from query parameter
+    img_b64 = base64.b64encode(png_bytes()).decode()
+    r = client.post(f"/api/predict?persist={persist_val}", json={"image": img_b64})
+    assert r.status_code == 200
+    history = client.get("/api/history").get_json()
+    assert len(history) == 0
+
+
+def test_predict_persist_false_body(client, appmod):
+    # Bug P-6: Robust persist parsing from JSON body
+    img_b64 = base64.b64encode(png_bytes()).decode()
+    r = client.post("/api/predict", json={"image": img_b64, "persist": False})
+    assert r.status_code == 200
+    history = client.get("/api/history").get_json()
+    assert len(history) == 0
+
+
+def test_inventory_storage_tip_both_keys(client):
+    # Bug P-9: Support both storage_tip and storage_tips
+    r1 = client.post("/api/inventory", json={"name": "Orange", "storage_tip": "Keep dry"})
+    assert r1.status_code == 200
+    r2 = client.post("/api/inventory", json={"name": "Banana", "storage_tips": "Hang up"})
+    assert r2.status_code == 200
+
+    items = client.get("/api/inventory").get_json()
+    tips = {it["name"]: it.get("storage_tip") for it in items}
+    assert tips["Orange"] == "Keep dry"
+    assert tips["Banana"] == "Hang up"
+
+
+def test_device_selection_env(appmod, monkeypatch):
+    # Bug P-8: FRESHGUARD_DEVICE handling
+    monkeypatch.setenv("FRESHGUARD_DEVICE", "cpu")
+    assert appmod._determine_device() == "cpu"

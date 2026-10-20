@@ -135,6 +135,7 @@ export default function Scanner() {
   const uploadImageMutation = trpc.scanner.uploadImage.useMutation();
   const createScanMutation = trpc.scanner.createScan.useMutation();
   const processOCRMutation = trpc.scanner.processOCR.useMutation();
+  const deleteScanMutation = trpc.scanner.deleteScan.useMutation();
   const analyzeIngredientsMutation = trpc.analysis.analyzeIngredients.useMutation();
 
   // Open Food Facts lookups (cached for 5 minutes in the browser, and in server memory as well)
@@ -156,7 +157,7 @@ export default function Scanner() {
   const barcodeIngredients = barcodeProduct ? effectiveIngredients(barcodeProduct.barcode, barcodeProduct) : "";
   const photoIngredients = photoProduct ? effectiveIngredients(photoProduct.barcode, photoProduct) : "";
   // The hybrid path replaces OCR only when the photo had a valid barcode, OFF knows the product and it has ingredient text.
-  const hybridActive = inputType === "image" && !!imageFile && !forceOcr && !!photoProduct && !!photoIngredients.trim();
+  const hybridActive = !forceOcr && !!photoProduct && !!(photoProduct.ingredientsText?.trim());
 
   // Auto-fill the product name from Open Food Facts, but never overwrite something the user typed.
   const nameSource = inputType === "barcode" ? barcodeProduct : inputType === "image" && hybridActive ? photoProduct : null;
@@ -260,6 +261,29 @@ export default function Scanner() {
     await runAnalysis(scanId, rawIngredients);
   };
 
+  /** Handle OCR scanning cleanly; deletes draft scan record if OCR fails or yields no text. */
+  const handleOCRScan = async (scanId: number, imageUrl: string) => {
+    toast.info("Extracting ingredients from image...");
+    try {
+      const ocrResult = await processOCRMutation.mutateAsync({
+        scanId,
+        imageUrl,
+      });
+      const ocrText = ocrResult?.ocrText?.trim();
+      if (!ocrText) {
+        throw new Error("No ingredients could be extracted");
+      }
+      return ocrText;
+    } catch (ocrErr: any) {
+      try {
+        await deleteScanMutation.mutateAsync({ scanId });
+      } catch {
+        // ignore delete cleanup error
+      }
+      throw ocrErr;
+    }
+  };
+
   const handleSubmit = async () => {
     setIsProcessing(true);
     try {
@@ -271,7 +295,11 @@ export default function Scanner() {
         await submitFromOff(barcodeProduct, barcodeIngredients.trim());
         return;
       }
-      if (hybridActive && photoProduct) {
+      if (inputType === "image" && hybridActive && photoProduct) {
+        if (!photoIngredients.trim()) {
+          toast.error("Please enter ingredients");
+          return;
+        }
         await submitFromOff(photoProduct, photoIngredients.trim());
         return;
       }
@@ -306,12 +334,7 @@ export default function Scanner() {
       const { scanId } = await createScanMutation.mutateAsync(scanData);
 
       if (inputType === "image" && scanData.imageUrl) {
-        toast.info("Extracting ingredients from image...");
-        const ocrResult = await processOCRMutation.mutateAsync({
-          scanId,
-          imageUrl: scanData.imageUrl,
-        });
-        scanData.rawIngredients = ocrResult.ocrText;
+        scanData.rawIngredients = await handleOCRScan(scanId, scanData.imageUrl);
       }
 
       if (!scanData.rawIngredients || !String(scanData.rawIngredients).trim()) {
@@ -334,7 +357,12 @@ export default function Scanner() {
   const submitDisabled =
     isProcessing ||
     (inputType === "text" && !ingredients.trim()) ||
-    (inputType === "image" && (!imageFile || photoDetect === "detecting" || (!!photoScan && photoQuery.isFetching && !forceOcr))) ||
+    (inputType === "image" && (
+      !imageFile ||
+      photoDetect === "detecting" ||
+      (!!photoScan && photoQuery.isFetching && !forceOcr) ||
+      (hybridActive && !photoIngredients.trim())
+    )) ||
     (inputType === "barcode" && (!barcodeProduct || !barcodeIngredients.trim()));
 
   const ingredientEditor = (code: string, value: string, id: string) => (

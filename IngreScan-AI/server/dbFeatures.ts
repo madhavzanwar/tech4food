@@ -47,13 +47,15 @@ export async function listRedeemableLinkCodes(now: Date = new Date()) {
 }
 
 /** Count a failed redemption attempt against every live code (a guess cannot be tied to one code). */
-export async function recordLinkCodeFailure(now: Date = new Date()) {
+/** Count a failed redemption attempt against a specific code when provided. */
+export async function recordLinkCodeFailure(codeId?: number, now: Date = new Date()) {
+  if (codeId === undefined) return;
   const ctx = await ctxOrThrow();
   const { db, s } = ctx;
   await db
     .update(s.whatsappLinkCodes)
     .set({ attempts: sql`${s.whatsappLinkCodes.attempts} + 1` })
-    .where(and(isNull(s.whatsappLinkCodes.usedAt), gt(s.whatsappLinkCodes.expiresAt, now)));
+    .where(and(eq(s.whatsappLinkCodes.id, codeId), isNull(s.whatsappLinkCodes.usedAt), gt(s.whatsappLinkCodes.expiresAt, now)));
 }
 
 /** Single-use: true only for the one caller that wins the race. */

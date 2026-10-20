@@ -48,12 +48,38 @@ export function resolveDatabaseConfig(env: NodeJS.ProcessEnv = process.env): Dat
     // file:./x.db, file:/abs/x.db, file:///abs/x.db, sqlite:./x.db, sqlite:///abs/x.db
     let rest = url.replace(/^(file|sqlite):/i, "");
     if (rest.startsWith("//")) rest = rest.slice(2);
+    try {
+      rest = decodeURIComponent(rest);
+    } catch {
+      // ignore
+    }
+    if (/^\/[a-zA-Z]:/.test(rest)) {
+      rest = rest.slice(1);
+    }
     filePath = rest;
   } else {
     filePath = (env.SQLITE_PATH ?? "").trim() || DEFAULT_SQLITE_RELATIVE_PATH;
+    try {
+      filePath = decodeURIComponent(filePath);
+    } catch {
+      // ignore
+    }
+    if (/^\/[a-zA-Z]:/.test(filePath)) {
+      filePath = filePath.slice(1);
+    }
   }
   if (!filePath) filePath = DEFAULT_SQLITE_RELATIVE_PATH;
-  return { dialect: "sqlite", path: path.resolve(process.cwd(), filePath) };
+
+  let finalPath: string;
+  if (filePath.startsWith("/")) {
+    finalPath = filePath;
+  } else if (/^[a-zA-Z]:[\\/]/.test(filePath)) {
+    finalPath = filePath;
+  } else {
+    finalPath = path.resolve(process.cwd(), filePath);
+  }
+
+  return { dialect: "sqlite", path: finalPath };
 }
 
 function findMigrationsFolder(): string {
@@ -75,17 +101,29 @@ let _client: Client | null = null;
 async function openSqlite(filePath: string): Promise<DbContext> {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const client = createClient({ url: `file:${filePath}` });
-  // Foreign keys are OFF by default in SQLite; ON DELETE CASCADE needs them.
-  await client.execute("PRAGMA foreign_keys = ON");
-  await client.execute("PRAGMA journal_mode = WAL");
-  await client.execute("PRAGMA busy_timeout = 5000");
-  const db = drizzleLibsql(client, { schema: sqliteSchema });
-  await migrateLibsql(db, { migrationsFolder: findMigrationsFolder() });
-  // The migrator may run inside a transaction that recycles the connection; re-assert the pragma.
-  await client.execute("PRAGMA foreign_keys = ON");
-  _client = client;
-  console.log(`[Database] Using embedded SQLite database at ${filePath}`);
-  return { dialect: "sqlite", db: db as unknown as MysqlDb, s: sqliteSchema as unknown as Schema };
+  try {
+    // Foreign keys are OFF by default in SQLite; ON DELETE CASCADE needs them.
+    await client.execute("PRAGMA foreign_keys = ON");
+    await client.execute("PRAGMA journal_mode = WAL");
+    await client.execute("PRAGMA busy_timeout = 5000");
+    const db = drizzleLibsql(client, { schema: sqliteSchema });
+    await migrateLibsql(db, { migrationsFolder: findMigrationsFolder() });
+    // The migrator may run inside a transaction that recycles the connection; re-assert the pragma.
+    await client.execute("PRAGMA foreign_keys = ON");
+    _client = client;
+    console.log(`[Database] Using embedded SQLite database at ${filePath}`);
+    return { dialect: "sqlite", db: db as unknown as MysqlDb, s: sqliteSchema as unknown as Schema };
+  } catch (error) {
+    try {
+      client.close();
+    } catch {
+      // ignore
+    }
+    if (_client === client) {
+      _client = null;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -123,7 +161,11 @@ export async function closeDatabase(): Promise<void> {
   _ctx = null;
   if (pending) await pending.catch(() => null);
   if (_client) {
-    _client.close();
+    try {
+      _client.close();
+    } catch {
+      // ignore
+    }
     _client = null;
   }
 }

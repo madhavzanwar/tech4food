@@ -83,6 +83,10 @@ export async function storagePut(
     const uploadsDir = path.resolve(process.cwd(), "uploads");
     const sanitizedName = key.replace(/[^a-zA-Z0-9._-]/g, "_");
     const filePath = path.resolve(uploadsDir, sanitizedName);
+    const rel = path.relative(uploadsDir, filePath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || path.dirname(filePath) !== uploadsDir) {
+      throw new Error("Invalid storage key: path traversal detected");
+    }
     const buf = typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
     await fs.promises.mkdir(uploadsDir, { recursive: true });
     await fs.promises.writeFile(filePath, buf);

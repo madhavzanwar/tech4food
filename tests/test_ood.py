@@ -5,7 +5,8 @@ import sys
 import numpy as np
 import pytest
 
-ROOT = __file__.rsplit("/tests/", 1)[0]
+from pathlib import Path
+ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -67,3 +68,20 @@ def test_assess_threshold_from_env(monkeypatch):
     r = ood.assess(logits)
     assert r["is_produce"] is True and r["produce_min_likelihood"] == 0.0
     assert ood.assess(logits, threshold=0.99)["is_produce"] is False
+
+
+def test_energy_score_temperature_zero():
+    # Bug P-10: Guard against ZeroDivisionError when temperature <= 0
+    res = ood.energy_score([1.0, 2.0], temperature=0.0)
+    assert math.isfinite(res)
+    assert res == pytest.approx(2.0)
+
+
+def test_assess_rounding_consistency(monkeypatch):
+    # Bug P-1: is_produce matches rounded likelihood
+    monkeypatch.delenv(ood.ENV_MIN, raising=False)
+    # Target p = 0.4996 -> rounds to 0.500
+    e_val = ood.energy_from_likelihood(0.4996)
+    r = ood.assess([e_val] + [-100.0] * 9, threshold=0.5)
+    assert r["produce_likelihood"] == 0.5
+    assert r["is_produce"] is True

@@ -92,7 +92,7 @@ const tone = (s: string) => (s === "fresh" ? "positive" : s === "normal" ? "caut
 const strokeFor = (s: string) =>
   s === "fresh" ? "var(--fn-verdant-green)" : s === "normal" ? "var(--fn-sunset-orange)" : "var(--fn-signal-red-orange)";
 
-export function ShelfScan({ onAdded, onUseSingle }: { onAdded: () => void | Promise<void>; onUseSingle: () => void }) {
+export function ShelfScan({ onAdded, onUseSingle }: { onAdded: (allAdded: boolean) => void | Promise<void>; onUseSingle: () => void }) {
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -195,7 +195,7 @@ export function ShelfScan({ onAdded, onUseSingle }: { onAdded: () => void | Prom
       setRows(prev => (prev ? prev.filter((_, i) => !done.has(i)) : prev));
       setAdding(false);
     }
-    if (done.size > 0) await onAdded();
+    if (done.size > 0) await onAdded(done.size === chosen.length);
   };
 
   const W = meta?.image.width ?? 1;
@@ -317,7 +317,7 @@ export function ShelfScan({ onAdded, onUseSingle }: { onAdded: () => void | Prom
               </Button>
             </CardContent>
           </Card>
-        ) : rows ? (
+        ) : rows && rows.length > 0 ? (
           <Card data-testid="shelf-review">
             <CardHeader>
               <CardTitle>
@@ -359,21 +359,19 @@ export function ShelfScan({ onAdded, onUseSingle }: { onAdded: () => void | Prom
                 </p>
               )}
 
-              {rows.length > 0 && (
-                <>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-bold text-graphite" data-testid="shelf-selected-count">
-                      {selectedCount} of {rows.length} selected
-                    </p>
-                    <div className="flex gap-2">
-                      <Button size="sm" variant="outline" onClick={() => setRows(rows.map(r => ({ ...r, selected: true })))}>
-                        Select all
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => setRows(rows.map(r => ({ ...r, selected: false })))}>
-                        Clear
-                      </Button>
-                    </div>
-                  </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-bold text-graphite" data-testid="shelf-selected-count">
+                  {selectedCount} of {rows.length} selected
+                </p>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setRows(prev => prev ? prev.map(r => ({ ...r, selected: true })) : prev)}>
+                    Select all
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setRows(prev => prev ? prev.map(r => ({ ...r, selected: false })) : prev)}>
+                    Clear
+                  </Button>
+                </div>
+              </div>
                   <ul className="space-y-3">
                     {rows.map((r, i) => (
                       <li
@@ -435,8 +433,6 @@ export function ShelfScan({ onAdded, onUseSingle }: { onAdded: () => void | Prom
                     {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlusCircle className="h-4 w-4" />}
                     Add selected to pantry ({selectedCount})
                   </Button>
-                </>
-              )}
             </CardContent>
           </Card>
         ) : (

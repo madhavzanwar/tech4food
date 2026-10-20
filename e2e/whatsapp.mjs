@@ -9,7 +9,7 @@ import http from "http";
 import os from "os";
 import path from "path";
 import { spawn } from "child_process";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { createRequire } from "module";
 import { sql } from "./lib/db.mjs";
 
@@ -101,16 +101,23 @@ function start(cmd, args, opts) {
 }
 function stopAll() {
   for (const c of children) {
-    try { process.kill(-c.pid, "SIGTERM"); } catch { /* already gone */ }
+    try {
+      if (process.platform === "win32") {
+        c.kill("SIGTERM");
+      } else {
+        process.kill(-c.pid, "SIGTERM");
+      }
+    } catch { /* already gone */ }
   }
 }
-async function waitFor(url, label, ms = 90_000) {
+async function waitFor(url, label, child, ms = 90_000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     try { if ((await fetch(url)).status < 500) return; } catch { /* not up yet */ }
     await sleep(500);
   }
-  throw new Error(`${label} did not start`);
+  const log = child ? child.getLog() : "";
+  throw new Error(`${label} did not start. Logs:\n${log}`);
 }
 
 // ---------------------------------------------------------------------- helpers
@@ -152,8 +159,10 @@ const ymd = (offsetDays) => new Date(Date.now() + offsetDays * 86_400_000).toISO
 // ------------------------------------------------------------------------- run
 async function main() {
   await new Promise((r) => stubServer.listen(STUB_PORT, "127.0.0.1", r));
-  const flask = start("python3", ["app.py"], { cwd: root, env: { ...process.env, FRESHGUARD_PORT: String(FLASK_PORT) } });
-  const web = start("node", ["--import", path.join(root, "e2e/lib/redirect-fetch.mjs"), "--import", "tsx", "./server/_core/index.ts"], {
+  const pyCmd = process.platform === "win32" ? "python" : "python3";
+  const flask = start(pyCmd, ["app.py"], { cwd: root, env: { ...process.env, FRESHGUARD_PORT: String(FLASK_PORT) } });
+  const redirectFetchUrl = pathToFileURL(path.join(root, "e2e/lib/redirect-fetch.mjs")).href;
+  const web = start("node", ["--import", redirectFetchUrl, "--import", "tsx", "./server/_core/index.ts"], {
     cwd: path.join(root, "IngreScan-AI"),
     env: {
       ...process.env, NODE_ENV: "development", PORT: String(WEB_PORT), SQLITE_PATH: dbFile, JWT_SECRET: SECRET, VITE_APP_ID: APP_ID,
@@ -163,8 +172,8 @@ async function main() {
       WHATSAPP_BOT_NUMBER: "+14155238886", WHATSAPP_REMINDER_INTERVAL_MS: "2000", WHATSAPP_RATE_BURST: "100", WHATSAPP_RATE_PER_MINUTE: "600",
     },
   });
-  await waitFor(`http://127.0.0.1:${FLASK_PORT}/api/samples`, "Flask");
-  await waitFor(`${BASE}/api/trpc/auth.me`, "web app");
+  await waitFor(`http://127.0.0.1:${FLASK_PORT}/api/samples`, "Flask", flask);
+  await waitFor(`${BASE}/api/trpc/auth.me`, "web app", web);
 
   // ---- accounts: two real users with signed sessions
   sql("insert into users (openId,name,role,loginMethod) values ('wa-alice','Alice','user','local')");
@@ -330,6 +339,8 @@ main()
     console.log(`\n${results.length - failed}/${results.length} passed`);
     stopAll();
     stubServer.close();
-    for (const f of [dbFile, dbFile + "-wal", dbFile + "-shm"]) fs.rmSync(f, { force: true });
+    for (const f of [dbFile, dbFile + "-wal", dbFile + "-shm"]) {
+      try { fs.rmSync(f, { force: true }); } catch { /* ignore Windows file locks on exit */ }
+    }
     setTimeout(() => process.exit(failed ? 1 : 0), 500);
   });

@@ -29,7 +29,11 @@ afterAll(async () => {
   await database.closeDatabase();
   if (savedUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = savedUrl;
   if (savedPath === undefined) delete process.env.SQLITE_PATH; else process.env.SQLITE_PATH = savedPath;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    // ignore EPERM / EBUSY lock errors on Windows
+  }
 });
 
 async function newUser(openId: string) {

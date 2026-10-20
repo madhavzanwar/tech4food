@@ -330,7 +330,6 @@ export function createWhatsappServices({ env, fetchImpl = fetch }: ServiceDeps):
       }));
       const match = findMatchingLinkRecord(records, code, now);
       if (!match || match.status === "invalid") {
-        await dbf.recordLinkCodeFailure(new Date(now));
         return { ok: false, reason: "invalid" };
       }
       if (match.status !== "ok") return { ok: false, reason: match.status };

@@ -407,13 +407,20 @@ class Semaphore {
   private queue: Array<() => void> = [];
   constructor(private max: number) {}
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.max) await new Promise<void>((resolve) => this.queue.push(resolve));
-    this.active++;
+    if (this.active >= this.max) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    } else {
+      this.active++;
+    }
     try {
       return await fn();
     } finally {
-      this.active--;
-      this.queue.shift()?.();
+      const next = this.queue.shift();
+      if (next) {
+        next();
+      } else {
+        this.active--;
+      }
     }
   }
 }

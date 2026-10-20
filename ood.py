@@ -34,11 +34,12 @@ ENV_MIN = "PRODUCE_MIN_LIKELIHOOD"
 
 def energy_score(logits: Sequence[float] | np.ndarray, temperature: float = 1.0) -> float:
     """T * logsumexp(logits / T), numerically stable. One logit vector (1-D)."""
-    x = np.asarray(logits, dtype=np.float64).reshape(-1) / float(temperature)
+    t = max(float(temperature), 1e-6)
+    x = np.asarray(logits, dtype=np.float64).reshape(-1) / t
     if x.size == 0 or not np.all(np.isfinite(x)):
         return float("-inf")
     m = float(x.max())
-    return float(temperature) * (m + math.log(float(np.exp(x - m).sum())))
+    return t * (m + math.log(float(np.exp(x - m).sum())))
 
 
 def max_softmax(logits: Sequence[float] | np.ndarray) -> float:
@@ -82,10 +83,11 @@ def assess(fruit_logits, threshold: float | None = None) -> dict:
     thr = min_likelihood() if threshold is None else float(threshold)
     score = energy_score(fruit_logits)
     p = likelihood_from_energy(score)
+    p_rounded = round(p, 3)
     return {
         "produce_score": round(score, 3) if math.isfinite(score) else None,
-        "produce_likelihood": round(p, 3),
-        "is_produce": bool(p >= thr),
+        "produce_likelihood": p_rounded,
+        "is_produce": bool(p_rounded >= thr),
         "produce_min_likelihood": thr,
         "ood_method": METHOD,
     }

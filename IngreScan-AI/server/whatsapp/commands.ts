@@ -116,7 +116,8 @@ export function parseCommand(input: string | undefined | null): Command {
   }
 
   if (looksLikeIngredients(cleaned)) {
-    const text = cleaned.replace(/^ingredients?\s*[:\-]\s*/i, "").slice(0, MAX_INGREDIENT_TEXT);
+    const text = cleaned.replace(/^ingredients?\s*[:\-]\s*/i, "").slice(0, MAX_INGREDIENT_TEXT).trim();
+    if (!text) return { type: "unknown", text: cleaned.slice(0, 200) };
     return { type: "ingredients", text };
   }
   return { type: "unknown", text: cleaned.slice(0, 200) };

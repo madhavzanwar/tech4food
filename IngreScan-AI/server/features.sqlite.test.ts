@@ -29,15 +29,19 @@ beforeAll(async () => {
   ({ appRouter } = await import("./routers"));
   runtime = await import("./whatsappRuntime");
   config = await import("./whatsappConfig");
-});
+}, 30000);
 
 afterAll(async () => {
   await database.closeDatabase();
   for (const [k, v] of [["DATABASE_URL", saved.url], ["SQLITE_PATH", saved.sqlite], ["OPENAI_API_KEY", saved.openai], ["BUILT_IN_FORGE_API_KEY", saved.forge], ["TWILIO_ACCOUNT_SID", saved.tw]] as const) {
     if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    // ignore EPERM / EBUSY lock errors on Windows
+  }
+}, 30000);
 
 async function user(openId: string) {
   await db.upsertUser({ openId, name: openId, loginMethod: "local" });

@@ -201,7 +201,8 @@ export default function FridgeTracker() {
       const matchesLocation =
         activeLocation === "all" || item.storageLocation === activeLocation;
       const matchesCategory =
-        selectedCategory === "all" || item.category === selectedCategory;
+        selectedCategory.toLowerCase() === "all" ||
+        (Boolean(item.category) && item.category.toLowerCase() === selectedCategory.toLowerCase());
       const matchesSearch =
         !searchQuery.trim() ||
         item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||

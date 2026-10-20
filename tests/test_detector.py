@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-ROOT = __file__.rsplit("/tests/", 1)[0]
+from pathlib import Path
+ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -182,3 +183,9 @@ def test_check_reasons():
     assert d.check_reasons(detector_label=None, fruit="mango", confidence=99, top_candidates=top_clear,
                            second_pass=True) == [d.REASON_SECOND_PASS]
     assert d.check_reasons(detector_label=None, fruit="mango", confidence=99) == []  # no detector label, not second pass
+
+
+def test_pad_box_degenerate():
+    # Bug P-2: degenerate/zero box ensures right > left and bottom > top
+    l, t, r, b = d.pad_box([50, 50, 50, 50], 100, 100)
+    assert r > l and b > t

@@ -12,10 +12,13 @@ vi.mock("./db", () => ({
   deleteScanIngredients: vi.fn(),
   addScanIngredient: vi.fn(),
   updateFoodScan: vi.fn(),
-  updateMedication: vi.fn(),
+  updateMedication: vi.fn(async () => 1),
+  deleteMedication: vi.fn(async () => 1),
+  deleteMedicalCondition: vi.fn(async () => 1),
   addInventoryItem: vi.fn(async () => 7),
   getUserInventory: vi.fn(async () => []),
-  updateInventoryItem: vi.fn(),
+  updateInventoryItem: vi.fn(async () => 1),
+  deleteInventoryItem: vi.fn(async () => 1),
   listProduceInventory: vi.fn(async () => []),
   addProduceInventoryItem: vi.fn(async () => 11),
   deleteProduceInventoryItem: vi.fn(async () => false),
@@ -162,7 +165,7 @@ describe("produce (FreshGuard) per-user storage", () => {
     ]);
     const rows = await caller.produce.listInventory();
     expect(rows[0]).toMatchObject({ fruit_type: "apple", days_left: 3, image_url: "", storage_tip: "" });
-    expect(rows[1]).toMatchObject({ days_left: 0, image_url: "/static/samples/banana.jpg" });
+    expect(rows[1]).toMatchObject({ days_left: -4, image_url: "/static/samples/banana.jpg" });
     expect(rows[0].created_at).toBe("2026-01-01T10:00:00.000Z");
   });
 });

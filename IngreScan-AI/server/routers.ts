@@ -8,6 +8,7 @@ import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { storagePut } from "./storage";
+import { ownerIdFromName } from "./uploads";
 import { invokeLLM } from "./_core/llm";
 import fs from "fs";
 import { randomBytes } from "crypto";
@@ -86,7 +87,7 @@ function toProduceInventoryRow(r: db.ProduceInventoryRow) {
     confidence: r.confidence,
     image_url: r.imageUrl ?? "",
     expiry_date: r.expiryDate,
-    days_left: Math.max(produceDaysLeft(r.expiryDate), 0),
+    days_left: produceDaysLeft(r.expiryDate),
     storage_tip: r.storageTip ?? "",
     created_at: r.createdAt.toISOString(),
   };
@@ -114,10 +115,14 @@ function requireDate(value: string | Date): Date {
 }
 
 /** Local uploads are stored as relative /uploads/... URLs the LLM cannot fetch; inline them. */
-async function resolveImageForLLM(url: string): Promise<string> {
+async function resolveImageForLLM(url: string, userId?: number): Promise<string> {
   if (!url.startsWith("/uploads/")) return url;
+  const baseName = path.basename(url);
+  if (userId !== undefined && ownerIdFromName(baseName) !== userId) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Image not found" });
+  }
   const uploadsDir = path.resolve(process.cwd(), "uploads");
-  const file = path.resolve(uploadsDir, path.basename(url));
+  const file = path.resolve(uploadsDir, baseName);
   if (path.dirname(file) !== uploadsDir) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid image URL" });
   try {
     const buf = await fs.promises.readFile(file);
@@ -257,7 +262,9 @@ export const appRouter = router({
     deleteMedicalCondition: protectedProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
-        return db.deleteMedicalCondition(input.id, ctx.user.id);
+        const count = await db.deleteMedicalCondition(input.id, ctx.user.id);
+        if (!count) throw new TRPCError({ code: "NOT_FOUND", message: "Medical condition not found" });
+        return { success: true };
       }),
 
     getMedications: protectedProcedure
@@ -281,13 +288,17 @@ export const appRouter = router({
         updates: medicationUpdateSchema,
       }))
       .mutation(async ({ ctx, input }) => {
-        return db.updateMedication(input.id, ctx.user.id, input.updates);
+        const count = await db.updateMedication(input.id, ctx.user.id, input.updates);
+        if (!count) throw new TRPCError({ code: "NOT_FOUND", message: "Medication not found" });
+        return { success: true };
       }),
 
     deleteMedication: protectedProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
-        return db.deleteMedication(input.id, ctx.user.id);
+        const count = await db.deleteMedication(input.id, ctx.user.id);
+        if (!count) throw new TRPCError({ code: "NOT_FOUND", message: "Medication not found" });
+        return { success: true };
       }),
   }),
 
@@ -343,7 +354,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         await requireOwnedScan(input.scanId, ctx.user.id);
-        const imageUrl = await resolveImageForLLM(input.imageUrl);
+        const imageUrl = await resolveImageForLLM(input.imageUrl, ctx.user.id);
         // Use LLM with vision to extract ingredients from image
         const response = await invokeLLM({
           messages: [
@@ -380,6 +391,16 @@ export const appRouter = router({
         });
 
         return { ocrText };
+      }),
+
+    deleteScan: protectedProcedure
+      .input(z.object({ scanId: z.number().int() }))
+      .mutation(async ({ ctx, input }) => {
+        await requireOwnedScan(input.scanId, ctx.user.id);
+        await db.deleteScanIngredients(input.scanId);
+        await db.deleteAlternatives(input.scanId);
+        await db.deleteFoodScan(input.scanId, ctx.user.id);
+        return { success: true };
       }),
   }),
 
@@ -845,21 +866,24 @@ Be helpful, accurate, educational, and personalized to the user's health profile
         if (expiryDate) {
           updates.expiryDate = requireDate(expiryDate);
         }
-        await db.updateInventoryItem(id, ctx.user.id, updates);
+        const count = await db.updateInventoryItem(id, ctx.user.id, updates);
+        if (!count) throw new TRPCError({ code: "NOT_FOUND", message: "Inventory item not found" });
         return { success: true };
       }),
 
     delete: protectedProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
-        await db.deleteInventoryItem(input.id, ctx.user.id);
+        const count = await db.deleteInventoryItem(input.id, ctx.user.id);
+        if (!count) throw new TRPCError({ code: "NOT_FOUND", message: "Inventory item not found" });
         return { success: true };
       }),
 
     consume: protectedProcedure
       .input(z.object({ id: z.number().int() }))
       .mutation(async ({ ctx, input }) => {
-        await db.updateInventoryItem(input.id, ctx.user.id, { status: "consumed" });
+        const count = await db.updateInventoryItem(input.id, ctx.user.id, { status: "consumed" });
+        if (!count) throw new TRPCError({ code: "NOT_FOUND", message: "Inventory item not found" });
         return { success: true };
       }),
   }),

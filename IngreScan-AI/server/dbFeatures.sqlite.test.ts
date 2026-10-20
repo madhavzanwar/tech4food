@@ -25,7 +25,11 @@ afterAll(async () => {
   await database.closeDatabase();
   if (savedUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = savedUrl;
   if (savedPath === undefined) delete process.env.SQLITE_PATH; else process.env.SQLITE_PATH = savedPath;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    // ignore EPERM / EBUSY lock errors on Windows
+  }
 });
 
 async function newUser(openId: string) {
@@ -58,7 +62,8 @@ describe("WhatsApp link codes", () => {
 
     // attempt limit
     await f.createWhatsappLinkCode(u.id, "h5", "s5", new Date(Date.now() + 600_000));
-    for (let i = 0; i < f.MAX_LINK_CODE_ATTEMPTS; i++) await f.recordLinkCodeFailure();
+    const code5 = (await f.listRedeemableLinkCodes()).find((c) => c.codeHash === "h5")!;
+    for (let i = 0; i < f.MAX_LINK_CODE_ATTEMPTS; i++) await f.recordLinkCodeFailure(code5.id);
     expect((await f.listRedeemableLinkCodes()).some((c) => c.codeHash === "h5")).toBe(false);
   });
 });

@@ -51,6 +51,10 @@ function lookupFor(code: string): string {
 
 export function BarcodeScanner({ onDetected, disabled = false, initialValue = "", className = "", idPrefix = "barcode", hideManual = false }: Props) {
   const [manual, setManual] = useState(initialValue);
+
+  useEffect(() => {
+    setManual(initialValue);
+  }, [initialValue]);
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [liveHint, setLiveHint] = useState<string | null>(null);
@@ -144,6 +148,7 @@ export function BarcodeScanner({ onDetected, disabled = false, initialValue = ""
         if (best.check.ok) {
           const c = best.check;
           stopCamera();
+          setManual(c.code);
           emit({ code: c.code, lookupCode: c.lookupCode, format: c.format, source: "camera", checksumValid: true });
           return;
         }
